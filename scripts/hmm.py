@@ -1,5 +1,4 @@
 import numpy as np
-import ssm
 import os
 import pandas as pd
 import random
@@ -8,11 +7,9 @@ from sklearn.model_selection import KFold
 from sklearn import svm
 import math
 import matplotlib.pyplot as plt
-import pickle
-import time
-import jax.random as jr
 
 from dynamax.hidden_markov_model import DiagonalGaussianHMM
+from dynamax.hidden_markov_model import LinearAutoregressiveHMM
 
 root = "/Users/gracehuckins/Documents/HMMMyConnectome"
 
@@ -62,15 +59,34 @@ def import_raw(num_networks):
             else:
                 np.savetxt(os.path.join(savepath, filename), activities)
 
-#instead—numpy structured array to label columns
-def getNetworkActivity(data, num_networks):
-    parcellation = f"{num_networks}networks"
-    parcels = pd.read_table(os.path.join(root,"data/parcel_data.txt"))[parcellation]
+def load_hcp(num_networks):
+    dir = os.path.join(root,"results",f"hcpdata{num_networks}")
+    if not os.path.exists(dir):
+        import_raw_hcp(num_networks)
+    data = {}
+    for file in os.listdir(dir):
+        file_key = file[3:9]
+        if file_key in data.keys():
+            data[file_key].append(np.loadtxt(os.path.join(dir,file)))
+        else:
+            data[file_key] = [np.loadtxt(os.path.join(dir,file))]
+    return data
+
+def getNetworkActivity(data, num_networks, hcp = False):
+    if hcp:
+        parcellation = f"Yeo_networks{num_networks}"
+        path = os.path.join(root,"data/parcel_data_hcp.txt")
+    else:
+        parcellation = f"{num_networks}networks"
+        path = os.path.join(root,"data/parcel_data.txt")
+    parcels = pd.read_table(path)[parcellation]
     roughnetworks = pd.unique(parcels)
+    if hcp:
+        roughnetworks = np.delete(roughnetworks, np.where(roughnetworks=='No network found'))
     activities = []
     #assert that length of parcels and #features in data are the same
     for network in roughnetworks:
-        if network.lower().startswith(parcellation):
+        if network.lower().startswith(parcellation) or hcp:
             netactivity = np.average(
                 data[:, (parcels == network)], axis=1
             ).reshape((-1, 1))
@@ -83,30 +99,21 @@ def gsr(data):
     ginverse = np.linalg.inv(gsignal.T @ gsignal) @ gsignal.T
     return data - ginverse @ data
 
-def get_transmats(data,latdim):
-    obsdim = np.shape(data[0])[1]
-    trans = []
+def get_transmats(data, latdim, together = False):
 
-    if not os.path.exists(os.path.join(root,"results",f"jaxmodel{obsdim}",f"means{latdim}")):
-        get_params_jax(obsdim,latdim)
+    if together:
+        hmm, params, props = fit_model_transonly(data,latdim)
+        trans = params.transitions.transition_matrix.reshape(-1)
 
-    means = np.loadtxt(os.path.join(root,"results",f"jaxmodel{obsdim}",f"means{latdim}"))
-    scale_diags = np.loadtxt(os.path.join(root,"results",f"jaxmodel{obsdim}",f"scale_diags{latdim}"))
-    probs = np.loadtxt(os.path.join(root,"results",f"jaxmodel{obsdim}",f"probs{latdim}"))
-
-    hmm = DiagonalGaussianHMM(latdim, obsdim)
-    params, props = hmm.initialize(initial_probs=probs, emission_means=means, emission_scale_diags=scale_diags)
-    props.emissions.means.trainable = False
-    props.emissions.scale_diags.trainable = False
-    props.initial.probs.trainable = False
-
-    for item in data:
-        item_params, _ = hmm.fit_em(params, props, item, num_iters=100, verbose=False)
-        trans.append(item_params.transitions.transition_matrix.reshape(-1))
+    else:
+        trans = []
+        for item in data:
+            hmm, params, props = fit_model_transonly(data,latdim)
+            trans.append(params.transitions.transition_matrix.reshape(-1))
 
     return trans
 
-def get_params_jax(obsdim, latdim):
+def get_params_jax(obsdim, latdim, hcp = False):
     '''
     calculates and saves the fit initial state and observation model for a given hmm on the full data
 
@@ -117,18 +124,25 @@ def get_params_jax(obsdim, latdim):
     Returns:
         nothing
     '''
-    path = os.path.join(root,"results",f"jaxmodel{obsdim}")
+    if hcp:
+        path = os.path.join(root,"results",f"hcpjaxmodel{obsdim}")
+    else:
+        path = os.path.join(root,"results",f"jaxmodel{obsdim}")
     if not os.path.exists(path):
         os.mkdir(path)
     hmm = DiagonalGaussianHMM(latdim, obsdim)
-    data = import_all(obsdim)
-    params, props = hmm.initialize()
+    if hcp:
+        data = load_hcp(obsdim)
+        data = [item for sublist in list(data.values()) for item in sublist]
+    else:
+        data = import_all(obsdim)
+    params, props = hmm.initialize(method="kmeans", emissions=np.array(data))
     params, _ = hmm.fit_em(params, props, np.array(data), num_iters=1000)
     np.savetxt(os.path.join(path,f"probs{latdim}"), params.initial.probs)
     np.savetxt(os.path.join(path,f"means{latdim}"), params.emissions.means)
     np.savetxt(os.path.join(path,f"scale_diags{latdim}"), params.emissions.scale_diags)
 
-def loocv(data1, data2, latdim1, latdim2):
+def loocv(data1, data2, latdim):
     '''
     Performs LOO cross-validation by fitting separate HMMs to each dataset and classifying the left-out data
     based on which HMM assigns it a higher log likelihood
@@ -147,29 +161,127 @@ def loocv(data1, data2, latdim1, latdim2):
     assert np.shape(data2[0])[1] == obsdim, "Datasets must have the same number of features"
     length = min(len(data1), len(data2)) - 1
     correct1 = 0
-    hmm1 = DiagonalGaussianHMM(latdim1, obsdim)
-    hmm2 = DiagonalGaussianHMM(latdim2, obsdim)
-    base_params1, props1 = hmm1.initialize()
-    base_params2, props2 = hmm2.initialize()
-    params2, _ = hmm2.fit_em(base_params2, props2, np.array(data2[:length]), num_iters=100)
+    hmm1 = DiagonalGaussianHMM(latdim, obsdim)
+    hmm2 = DiagonalGaussianHMM(latdim, obsdim)
+    base_params1, props1 = hmm1.initialize(method="kmeans", emissions=np.array(data1[:length]))
+    base_params2, props2 = hmm2.initialize(method="kmeans", emissions=np.array(data2[:length]))
+    params2, _ = hmm2.fit_em(base_params2, props2, np.array(data2[:length]), num_iters=100, verbose=False)
     for i in range(len(data1)):
         temp = data1.copy()
         temp.pop(i)
         random.shuffle(temp)
-        params1, _ = hmm1.fit_em(base_params1, props1, np.array(temp[:length]), num_iters=100)
+        params1, _ = hmm1.fit_em(base_params1, props1, np.array(temp[:length]), num_iters=100, verbose=False)
         if hmm1.marginal_log_prob(params1, data1[i]) > hmm2.marginal_log_prob(params2, data1[i]):
             correct1 += 1
     correct2 = 0
-    params1, _ = hmm1.fit_em(base_params1, props1, np.array(data1[:length]), num_iters=100)
+    params1, _ = hmm1.fit_em(base_params1, props1, np.array(data1[:length]), num_iters=100, verbose=False)
     for i in range(len(data2)):
         temp = data2.copy()
         temp.pop(i)
         random.shuffle(temp)
-        params2, _ = hmm2.fit_em(base_params2, props2, np.array(temp[:length]), num_iters=100)
+        params2, _ = hmm2.fit_em(base_params2, props2, np.array(temp[:length]), num_iters=100, verbose=False)
         if hmm1.marginal_log_prob(params1, data2[i]) < hmm2.marginal_log_prob(params2, data2[i]):
             correct2 += 1
     print(correct1,correct2)
     return np.average([correct1/(correct1 + len(data2) - correct2), correct2/(correct2 + len(data1) - correct1)])
+
+def loocv_ar(data1, data2, latdim, lags):
+    random.shuffle(data1)
+    random.shuffle(data2)
+    obsdim = np.shape(data1[0])[1]
+    assert np.shape(data2[0])[1] == obsdim, "Datasets must have the same number of features"
+    length = min(len(data1), len(data2)) - 1
+    correct1 = 0
+    hmm = LinearAutoregressiveHMM(latdim, obsdim, num_lags=lags)
+    base_params1, props1 = hmm.initialize(method="kmeans", emissions=np.array(data1[:length]))
+    base_params2, props2 = hmm.initialize(method="kmeans", emissions=np.array(data2[:length]))
+    inputs = []
+    for datum in data2[:length]:
+        inputs.append(hmm.compute_inputs(datum))
+    params2, _ = hmm.fit_em(base_params2, props2, np.array(data2[:length]), inputs=np.array(inputs), num_iters=100, verbose = False)
+    for i in range(len(data1)):
+        temp = data1.copy()
+        temp.pop(i)
+        random.shuffle(temp)
+        inputs = []
+        for datum in temp[:length]:
+            inputs.append(hmm.compute_inputs(datum))
+        params1, _ = hmm.fit_em(base_params1, props1, np.array(temp[:length]), inputs=np.array(inputs), num_iters=100, verbose = False)
+        inputs = hmm.compute_inputs(data1[i])
+        if hmm.marginal_log_prob(params1, data1[i], inputs=inputs) > hmm.marginal_log_prob(params2, data1[i], inputs=inputs):
+            correct1 += 1
+    correct2 = 0
+    inputs = []
+    for datum in data1[:length]:
+        inputs.append(hmm.compute_inputs(datum))
+    params1, _ = hmm.fit_em(base_params1, props1, np.array(data1[:length]), inputs=np.array(inputs), num_iters=100, verbose = False)
+    for i in range(len(data2)):
+        temp = data2.copy()
+        temp.pop(i)
+        random.shuffle(temp)
+        inputs = []
+        for datum in temp[:length]:
+            inputs.append(hmm.compute_inputs(datum))
+        params2, _ = hmm.fit_em(base_params2, props2, np.array(temp[:length]), inputs=np.array(inputs), num_iters=100, verbose = False)
+        inputs = hmm.compute_inputs(data2[i])
+        if hmm.marginal_log_prob(params1, data2[i], inputs=inputs) < hmm.marginal_log_prob(params2, data2[i], inputs=inputs):
+            correct2 += 1
+    print(correct1,correct2)
+    return np.average([correct1/(correct1 + len(data2) - correct2), correct2/(correct2 + len(data1) - correct1)])
+
+def loocvtrans(data1, data2, latdim):
+    random.shuffle(data1)
+    random.shuffle(data2)
+    obsdim = np.shape(data1[0])[1]
+    assert np.shape(data2[0])[1] == obsdim, "Datasets must have the same number of features"
+    length = min(len(data1), len(data2)) - 1
+    correct1 = 0
+
+    hmm2, params2, props2 = fit_model_transonly(data2[:length],latdim)
+    for i in range(len(data1)):
+        temp = data1.copy()
+        temp.pop(i)
+        random.shuffle(temp)
+        hmm1, params1, props1 = fit_model_transonly(temp[:length],latdim)
+        if hmm1.marginal_log_prob(params1, data1[i]) > hmm2.marginal_log_prob(params2, data1[i]):
+            correct1 += 1
+    correct2 = 0
+    hmm1, params1, props1 = fit_model_transonly(data1[:length],latdim)
+    for i in range(len(data2)):
+        temp = data2.copy()
+        temp.pop(i)
+        random.shuffle(temp)
+        hmm2, params2, props2 = fit_model_transonly(temp[:length],latdim)
+        if hmm1.marginal_log_prob(params1, data2[i]) < hmm2.marginal_log_prob(params2, data2[i]):
+            correct2 += 1
+    print(correct1,correct2)
+    return np.average([correct1/(correct1 + len(data2) - correct2), correct2/(correct2 + len(data1) - correct1)])
+
+def fit_model_transonly(data, latdim, hcp = False):
+    obsdim = np.shape(data[0])[1]
+
+    if hcp:
+        path = os.path.join(root,"results",f"hcpjaxmodel{obsdim}")
+    else:
+        path = os.path.join(root,"results",f"jaxmodel{obsdim}")
+
+    if not os.path.exists(os.path.join(path,f"means{latdim}")):
+        get_params_jax(obsdim, latdim, hcp)
+
+    means = np.loadtxt(os.path.join(path,f"means{latdim}"))
+    scale_diags = np.loadtxt(os.path.join(path,f"scale_diags{latdim}"))
+    probs = np.loadtxt(os.path.join(path,f"probs{latdim}"))
+
+    hmm = DiagonalGaussianHMM(latdim, obsdim)
+    params, props = hmm.initialize(initial_probs=probs, emission_means=means, emission_scale_diags=scale_diags)
+
+    props.emissions.means.trainable = False
+    props.emissions.scale_diags.trainable = False
+    props.initial.probs.trainable = False
+
+    params, _ = hmm.fit_em(params, props, np.array(data), num_iters=100, verbose=False)
+
+    return hmm, params, props
 
 def svmcv(data1, data2):
 
@@ -208,10 +320,12 @@ def svmcv(data1, data2):
 
     return np.average([correct1/(correct1 + len(data2) - correct2), correct2/(correct2 + len(data1) - correct1)])
 
-
-def permtest(data1, data2, reps=50):
+def permtest(data1, data2, class_func, latdim=6, reps=50):
     length = math.floor(np.average([len(data1), len(data2)]))
-    realacc = svmcv(data1,data2)
+    if class_func == svmcv:
+        realacc = svmcv(data1,data2)
+    else:
+        realacc = class_func(data1, data2, latdim)
     permaccs = []
 
     for i in range(reps):
@@ -219,10 +333,14 @@ def permtest(data1, data2, reps=50):
         random.shuffle(alldatas)
         data1 = alldatas[:length]
         data2 = alldatas[length:2*length]
-        acc = svmcv(data1,data2)
+        if class_func == svmcv:
+            acc = svmcv(data1, data2)
+        else:
+            acc = class_func(data1, data2, latdim)
+
         permaccs.append(acc)
 
-    plt.hist(permaccs)
+    plt.hist(permaccs,bins=50)
     plt.axvline(x=realacc)
     plt.show()
 
@@ -265,18 +383,25 @@ def getstats(model, params, datas):
     return avgoccs, avgdwells, avgchanges
 
 def plot_hmm_ll(data, maxstates, folds):
-    test_ll = np.zeros(maxstates)
+    test_ll = np.zeros(maxstates-1)
+    print(len(test_ll))
     obsdim = np.shape(data[0])[1]
     hiddenstates = np.arange(2, maxstates + 1)
+    print(len(hiddenstates))
     kf = KFold(n_splits=folds)
     for train, test in kf.split(data):
         for num_states in hiddenstates:
             print(num_states)
-            hmm = DiagonalGaussianHMM(num_states, obsdim)
-            params, props = hmm.initialize()
-            params, _ = hmm.fit_em(params, props, np.array(data)[train], num_iters=100)
+            #hmm = DiagonalGaussianHMM(num_states, obsdim)
+            hmm = LinearAutoregressiveHMM(num_states, obsdim, num_lags=1)
+            params, props = hmm.initialize(method="kmeans", emissions=np.array(data)[train])
+            inputs = []
+            for index in train:
+                inputs.append(hmm.compute_inputs(np.array(data)[index]))
+            params, _ = hmm.fit_em(params, props, np.array(data)[train], inputs=np.array(inputs), num_iters=100, verbose=False)
             for index in test:
-                test_ll[num_states - 1] += hmm.marginal_log_prob(params, np.array(data)[index])
+                inputs = hmm.compute_inputs(np.array(data)[index])
+                test_ll[num_states - 2] += hmm.marginal_log_prob(params, np.array(data)[index], inputs=inputs)
     plt.plot(hiddenstates, test_ll)
     plt.show()
 
@@ -332,37 +457,21 @@ def plot_emission_networks(mus1, mus2):
     plt.text(-100, 0, networkstring, fontsize=10)
     plt.show()
 
-
-#note—only seems to be living in very limited # of states!
-#next step—compare fitting for exact same data with jax & non-jax
-tues, thurs = import_tuesthurs(17)
-
-for i in range(10):
-    tues_trans = get_transmats(tues, 2)
-    thurs_trans = get_transmats(thurs, 2)
-    print(svmcv(tues_trans, thurs_trans))
-
-quit()
-tues_cov = []
-for data in tues:
-    tues_cov.append(np.cov(data.T).reshape(-1))
-thurs_cov = []
-for data in thurs:
-    thurs_cov.append(np.cov(data.T).reshape(-1))
-
-print(svmcv(tues_cov, thurs_cov))
+def main():
+    tues, thurs = import_tuesthurs(7)
+    normal = []
+    ar = []
+    hidden_states = range(3, 12)
+    for state in hidden_states:
+        normal.append(loocv(tues, thurs, state))
+        ar.append(loocv_ar(tues, thurs, state, 1))
+    plt.plot(hidden_states, normal)
+    plt.plot(hidden_states, ar)
+    plt.show()
 
 
-quit()
+if __name__ == "__main__":
+    main()
 
-accs = []
-states = range(3,15)
-for s in states:
-    tues_trans = get_transmats(tues, s)
-    thurs_trans = get_transmats(thurs, s)
-    acc = svmcv(tues_trans, thurs_trans)
-    accs.append(acc)
-    print(acc)
 
-plt.plot(states, accs)
-plt.show()
+
