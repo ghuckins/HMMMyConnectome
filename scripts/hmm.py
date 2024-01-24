@@ -14,8 +14,8 @@ from jax import vmap
 from k_means import kmeans_init
 import seaborn as sns
 
-from dynamax.hidden_markov_model import DiagonalGaussianHMM
-from dynamax.hidden_markov_model import LinearAutoregressiveHMM
+from src.dynamax.hidden_markov_model.models.gaussian_hmm import DiagonalGaussianHMM
+from src.dynamax.hidden_markov_model.models.arhmm import LinearAutoregressiveHMM
 
 root = "/Users/gracehuckins/Documents/HMMMyConnectome"
 def import_all(num_networks):
@@ -28,7 +28,7 @@ def import_all(num_networks):
         data: list of numpy arrays, each array is one recording
 
     '''
-    path = os.path.join(root,"results", f"data{num_networks}")
+    path = os.path.join(root,"data", f"data{num_networks}")
     if not os.path.exists(path):
         os.mkdir(path)
         import_raw(num_networks)
@@ -49,9 +49,9 @@ def import_tuesthurs(num_networks,split=False):
         thurs_data: a list of numpy arrays, each of which is a recording made on thursday
     '''
     if split:
-        path = os.path.join(root, "results", f"data{num_networks}_split")
+        path = os.path.join(root, "data", f"data{num_networks}_split")
     else:
-        path = os.path.join(root,"results",f"data{num_networks}")
+        path = os.path.join(root,"data",f"data{num_networks}")
     tues_data = []
     thurs_data = []
     for filename in os.listdir(path):
@@ -66,7 +66,7 @@ def import_raw(num_networks):
     path = os.path.join(root,"data/MyConnectome")
     metadata = pd.read_table(os.path.join(path, "trackingdata_goodscans.txt"))
     metadata = metadata.set_index("subcode")
-    savepath = os.path.join(root, "results", f"data{num_networks}")
+    savepath = os.path.join(root, "data", f"data{num_networks}")
     if not os.path.exists(savepath):
         os.mkdir(savepath)
 
@@ -112,8 +112,8 @@ def gsr(data):
     return data - ginverse @ data
 
 def split_data(num_networks):
-    path = os.path.join(root,"results",f"data{num_networks}")
-    dest_path = os.path.join(root,"results",f"data{num_networks}_split")
+    path = os.path.join(root,"data",f"data{num_networks}")
+    dest_path = os.path.join(root,"data",f"data{num_networks}_split")
     if not os.path.exists(path):
         os.mkdir(path)
         import_raw(num_networks)

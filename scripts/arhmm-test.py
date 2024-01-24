@@ -4,9 +4,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 
-from dynamax.hidden_markov_model import LinearAutoregressiveHMM
-from dynamax.utils.plotting import gradient_cmap
-from dynamax.utils.utils import random_rotation
+from src.dynamax import LinearAutoregressiveHMM
+from src.dynamax import gradient_cmap
+from src.dynamax.utils.utils import random_rotation
 
 sns.set_style("white")
 sns.set_context("talk")

@@ -4,7 +4,7 @@ from scipy.stats import zscore
 import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
-from hmm import gsr, getNetworkActivity, get_params_jax, get_saved_params, get_key,\
+from hmm import gsr, getNetworkActivity, get_saved_params, get_key,\
     fit_all_models, init_transonly, logprob_all_models
 from k_means import kmeans_init
 import random
@@ -15,8 +15,8 @@ import sys
 import warnings
 warnings.filterwarnings("ignore")
 
-from dynamax.hidden_markov_model import DiagonalGaussianHMM
-from dynamax.hidden_markov_model import LinearAutoregressiveHMM
+from src.dynamax import DiagonalGaussianHMM
+from src.dynamax import LinearAutoregressiveHMM
 
 root = "/Users/gracehuckins/Documents/HMMMyConnectome"
 
