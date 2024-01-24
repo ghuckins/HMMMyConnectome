@@ -73,7 +73,6 @@ dependencies:
   - wheel=0.37.1=pyhd3eb1b0_0
   - xarray=0.20.1=pyhd3eb1b0_1
   - xz=5.2.5=h1de35cc_0
-  - zlib=1.2.12=h4dc903c_1
   - zstd=1.5.2=hcb37349_0
   - pip:
     - absl-py==1.4.0
@@ -108,7 +107,6 @@ dependencies:
     - scikit-learn==1.0.2
     - scipy==1.8.0
     - sklearn==0.0
-    - ssm==0.0.1
     - statsmodels==0.13.2
     - tensorflow-probability==0.19.0
     - threadpoolctl==3.1.0
@@ -117,4 +115,4 @@ dependencies:
     - typeguard==2.13.3
     - typing-extensions==4.4.0
     - urllib3==1.26.9
-prefix: /Users/gracehuckins/opt/anaconda3/envs/MyConnectome
+prefix: /Users/gracehuckins/opt/anaconda3/envs/HMMMyConnectome
