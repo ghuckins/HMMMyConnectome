@@ -13,6 +13,7 @@ import jax.numpy as jnp
 from jax import vmap
 from k_means import kmeans_init
 import seaborn as sns
+from sklearn.linear_model import LinearRegression
 
 from src.dynamax.hidden_markov_model.models.gaussian_hmm import DiagonalGaussianHMM
 from src.dynamax.hidden_markov_model.models.arhmm import LinearAutoregressiveHMM
@@ -149,14 +150,17 @@ def gsr(data):
     Returns:
         gsr_data: A numpy array of fMRI data with global signal regressed out
     """
-    data = zscore(data, axis=0)
     gsignal = np.average(data, axis=1)
-    print(np.sum(np.corrcoef(data.T)))
+    print(np.shape(gsignal))
     gsignal = np.reshape(gsignal, (-1, 1))
     ginverse = np.linalg.inv(gsignal.T @ gsignal) @ gsignal.T
-    gsr_data = data - ginverse @ data
-    print(np.sum(np.corrcoef(gsr_data.T),axis=1))
+    beta = ginverse @ data
+    print(np.shape(gsignal))
+    print(np.dot(data[:,0] - gsignal*beta[0], gsignal))
 
+    reg = LinearRegression().fit(gsignal, data)
+    gsr_data = data - gsignal @ beta
+    reg = LinearRegression().fit(gsignal, gsr_data)
     #run regression between gsr and global signal and make sure it's 0 with scikit-learn
 
 
