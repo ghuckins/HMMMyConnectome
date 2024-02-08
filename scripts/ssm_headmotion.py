@@ -2,12 +2,41 @@ import ssm
 import numpy as np
 import random
 import os
+from hmm import import_raw
 import seaborn as sns
 import pandas as pd
 import pickle
 import matplotlib.pyplot as plt
 
 root = "/Users/gracehuckins/Documents/HMMMyConnectome"
+
+
+def split_data(num_networks):
+    path = os.path.join(root, "data", f"data{num_networks}")
+    dest_path = os.path.join(root, "data", f"data{num_networks}_split")
+    if not os.path.exists(path):
+        os.mkdir(path)
+        import_raw(num_networks)
+    os.mkdir(dest_path)
+    for file_name in os.listdir(path):
+        data = np.loadtxt(os.path.join(path, file_name))
+        mask = np.loadtxt(os.path.join(root, "data", "tmasks", file_name[:6] + ".txt"))
+        curr = mask[0]
+        counter = 0
+        start = 0
+        for i in range(len(mask)):
+            if mask[i] - curr == 1:
+                start = i
+                curr = mask[i]
+            if mask[i] - curr == -1:
+                np.savetxt(
+                    os.path.join(dest_path, file_name[:-4] + f"_{counter}.txt"),
+                    data[start:i, :],
+                )
+                curr = mask[i]
+                counter += 1
+
+
 def loocv_split(data1, data2, latdim):
     random.shuffle(data1)
     random.shuffle(data2)

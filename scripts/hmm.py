@@ -32,7 +32,7 @@ def import_all(num_networks):
         data: list of numpy arrays, each array is one recording
     """
     path = os.path.join(root, "data", f"data{num_networks}")
-    if not os.path.exists(path):  # if data have not yet been preprocessed, preprocess them!
+    if not os.path.exists(path):
         os.mkdir(path)
         import_raw(num_networks)
     data = []
@@ -96,7 +96,7 @@ def import_raw(num_networks):
             day = metadata.loc[filename.replace(".txt", "")]["day_of_week"]
             raw_data = np.loadtxt(os.path.join(path, filename))
             raw_data = gsr(raw_data)
-            activities = zscore(getNetworkActivity(raw_data, num_networks), axis=0)
+            activities = zscore(get_network_activity(raw_data, num_networks), axis=0)
 
             if day == "2":
                 np.savetxt(
@@ -114,12 +114,7 @@ def import_raw(num_networks):
     return None
 
 
-def main():
-    import_raw(17)
-
-    quit()
-
-def getNetworkActivity(data, num_networks, hcp=False):
+def get_network_activity(data, num_networks, hcp=False):
     """
     Averages activation across either the Yeo 7 or Yeo 17 networks at each timepoint in the data
 
@@ -172,58 +167,43 @@ def gsr(data):
     return gsr_data
 
 
-def split_data(num_networks):
-    path = os.path.join(root, "data", f"data{num_networks}")
-    dest_path = os.path.join(root, "data", f"data{num_networks}_split")
-    if not os.path.exists(path):
-        os.mkdir(path)
-        import_raw(num_networks)
-    os.mkdir(dest_path)
-    for file_name in os.listdir(path):
-        data = np.loadtxt(os.path.join(path, file_name))
-        mask = np.loadtxt(os.path.join(root, "data", "tmasks", file_name[:6] + ".txt"))
-        curr = mask[0]
-        counter = 0
-        start = 0
-        for i in range(len(mask)):
-            if mask[i] - curr == 1:
-                start = i
-                curr = mask[i]
-            if mask[i] - curr == -1:
-                np.savetxt(
-                    os.path.join(dest_path, file_name[:-4] + f"_{counter}.txt"),
-                    data[start:i, :],
-                )
-                curr = mask[i]
-                counter += 1
+def get_key():
+    """
+    Returns a random PRNG key in order to randomize model fitting and other stochastic Jax-based operations
+
+    Returns: A PRNG key usable by Jax functions
+    """
+    return jr.PRNGKey(random.randint(0, 10000))
 
 
-def get_transmats(data, latdim, ar=True, together=False):
-    emissions, probs = get_saved_params(data, latdim, ar)
-    hmm, params, props = init_transonly(emissions, probs, ar)
+def get_params(data, latdim, ar=False, key_string="", lags=1):
+    """
+    Fits a chosen HMM to a dataset and saves the resulting HMM parameters, except the transition matrix, for later use
 
-    if together:
-        params = fit_all_models(hmm, params, props, jnp.array(data), ar)
-        trans = params.transitions.transition_matrix
+    Args:
+        data: a list of num_timepoints x num_networks numpy arrays
+        latdim: the number of hidden states in the model
+        ar: whether or not the model is autoregressive
+        key_string: "" if data are from MyConnectome, "hcp" if data are from HCP
+        lags: if the model is autoregressive, how many lags to include
 
-    else:
-        trans = []
-        for item in data:
-            hmm, params, props = fit_all_models(hmm, params, props, item, ar)
-            trans.append(params.transitions.transition_matrix.reshape(-1))
-
-    return trans
-
-
-def get_params_jax(data, latdim, ar, key_string="", lags=1):
+    Returns:
+        None
+    """
     obsdim = np.shape(data[0])[1]
 
     if ar:
-        path = os.path.join(root, "results", f"{key_string}arhmm{obsdim}")
+        key_string = key_string + "ar"
+
+    path = os.path.join(root, "results", f"{key_string}hmm{obsdim}")
+    if os.path.exists(os.path.join(path, f"emissions{latdim}")): # checking if parameters have already been saved
+        return None
+
+    if ar:
         hmm = LinearAutoregressiveHMM(latdim, obsdim, num_lags=lags)
         inputs = jnp.stack([hmm.compute_inputs(datum) for datum in data])
+
     else:
-        path = os.path.join(root, "results", f"{key_string}hmm{obsdim}")
         hmm = DiagonalGaussianHMM(latdim, obsdim)
 
     if not os.path.exists(path):
@@ -248,18 +228,30 @@ def get_params_jax(data, latdim, ar, key_string="", lags=1):
     plt.plot(range(len(ll)), ll)
     plt.show()
 
+    return None
 
-def get_saved_params(data, latdim, ar=True, key_string=""):
-    obsdim = np.shape(data[0])[1]
 
+def get_saved_params(obsdim, latdim, ar=False, key_string=""):
+    """
+    Retrieves previously saved fit parameters for a given HMM and dataset
+
+    Args:
+        obsdim: the emission dimension of the model
+        latdim: the number of hidden states in the model
+        ar: whether or not the model is autoregressive
+        key_string: "" if previously fit data are from MyConnectome, "hcp" if data are from HCP
+
+    Returns:
+        emissions: the fit emissions parameters
+        probs: the fit initial state probabilites
+    """
     if ar:
         path = os.path.join(root, "results", f"{key_string}arhmm{obsdim}")
     else:
         path = os.path.join(root, "results", f"{key_string}hmm{obsdim}")
 
-    if not os.path.exists(os.path.join(path, f"emissions{latdim}")):
-        print("getting parameters")
-        get_params_jax(data, latdim, ar, key_string=key_string)
+    assert os.path.exists(os.path.join(path, f"emissions{latdim}")), \
+        "You need to save the parameters first using the get_params method."
 
     with open(os.path.join(path, f"emissions{latdim}"), "rb") as file:
         emissions = pickle.load(file)
@@ -269,6 +261,20 @@ def get_saved_params(data, latdim, ar=True, key_string=""):
 
 
 def fit_all_models(hmm, params, props, data, ar=False, num_iters=100):
+    """
+    Given an HMM, its parameters and properties, and a dataset, fits the model to that dataset
+
+    Args:
+        hmm: a dynamax HMM object
+        params: the parameters of the HMM
+        props: the properties of the HMM's parameters, which dictate which parameters should be trained
+        data: a list of num_timepoints x num_networks numpy arrays
+        ar: whether or not the model is autoregressive
+        num_iters: the number of EM iterations to carry out
+
+    Returns:
+        params: the fit parameters of the HMM
+    """
     if ar:
         inputs = jnp.stack([hmm.compute_inputs(datum) for datum in data])
         params, _ = hmm.fit_em(
@@ -281,11 +287,25 @@ def fit_all_models(hmm, params, props, data, ar=False, num_iters=100):
     return params
 
 
-def init_transonly(emissions, probs, ar, num_lags=1):
+def init_transonly(emissions, probs, ar, lags=1):
+    """
+    Initializes and HMM for transition matrix-only fitting
+
+    Args:
+        emissions: the emissions parameters for the HMM
+        probs: the initial probabilities for the HMM
+        ar: whether or not the model is autoregresssive
+        lags: if the model is autoregressive, how many lags to include
+
+    Returns:
+        hmm: the appropriate dynamax HMM object with correct hidden states, emission dimension, ar status, etc.
+        params: the parameters of the HMM
+        props: the properties of the HMM's parameters, which dictate which parameters should be trained
+    """
     if ar:
         latdim = emissions.weights.shape[0]
         obsdim = emissions.weights.shape[1]
-        hmm = LinearAutoregressiveHMM(latdim, obsdim, num_lags=num_lags)
+        hmm = LinearAutoregressiveHMM(latdim, obsdim, num_lags=lags)
         params, props = hmm.initialize(
             key=get_key(),
             method="prior",
@@ -316,6 +336,16 @@ def init_transonly(emissions, probs, ar, num_lags=1):
 
     return hmm, params, props
 
+def main():
+    data = import_all(17)
+    states = np.arange(2,13)
+    for state in states:
+        get_params(data, state, ar=False)
+
+
+
+
+
 
 def logprob_all_models(hmm, params, data, ar):
     if ar:
@@ -328,14 +358,11 @@ def loocv(data1, data2, latdim, trans=False, ar=False, lags=1, key_string=""):
     random.shuffle(data1)
     random.shuffle(data2)
     obsdim = np.shape(data1[0])[1]
-    assert (
-            np.shape(data2[0])[1] == obsdim
-    ), "Datasets must have the same number of features"
     length = min(len(data1), len(data2)) - 1
 
     if trans:
         emissions, probs = get_saved_params(
-            np.concatenate((data1, data2), axis=0), latdim, ar, key_string=key_string
+            np.shape(data1[0])[1], latdim, ar, key_string=key_string
         )
         hmm, base_params1, props = init_transonly(emissions, probs, ar)
         base_params2 = base_params1
@@ -512,6 +539,23 @@ def svmcv(data1, data2):
     )
 
 
+def get_transmats(data, latdim, ar=True, together=False):
+    emissions, probs = get_saved_params(data, latdim, ar)
+    hmm, params, props = init_transonly(emissions, probs, ar)
+
+    if together:
+        params = fit_all_models(hmm, params, props, jnp.array(data), ar)
+        trans = params.transitions.transition_matrix
+
+    else:
+        trans = []
+        for item in data:
+            hmm, params, props = fit_all_models(hmm, params, props, item, ar)
+            trans.append(params.transitions.transition_matrix.reshape(-1))
+
+    return trans
+
+
 def permtest(data1, data2, class_func, latdim=6, reps=50):
     length = math.floor(np.average([len(data1), len(data2)]))
     if class_func == svmcv:
@@ -583,10 +627,6 @@ def getstats(model, params, datas, num_states, ar):
             avgdwells.append(np.mean(item))
             stddwells.append(np.std(item))
         return occs  # avgoccs, avgdwells, avgchanges, stdoccs, stddwells, stdchanges
-
-
-def get_key():
-    return jr.PRNGKey(random.randint(0, 10000))
 
 
 def plot_hmm_ll(data, maxstates, folds):
