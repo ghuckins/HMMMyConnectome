@@ -13,7 +13,6 @@ import jax.numpy as jnp
 from jax import vmap
 from k_means import kmeans_init
 import seaborn as sns
-from sklearn.linear_model import LinearRegression
 
 from src.dynamax.hidden_markov_model.models.gaussian_hmm import DiagonalGaussianHMM
 from src.dynamax.hidden_markov_model.models.arhmm import LinearAutoregressiveHMM
@@ -86,7 +85,6 @@ def import_raw(num_networks):
     """
     path = os.path.join(data_root, "MyConnectome")
     metadata = pd.read_table(os.path.join(path, "trackingdata_goodscans.txt"))
-    #for verification: print(np.array(metadata[["subcode", "day_of_week"]]))
     metadata = metadata.set_index("subcode")
     savepath = os.path.join(root, "data", f"data{num_networks}")
 
@@ -113,24 +111,40 @@ def import_raw(num_networks):
             else:
                 np.savetxt(os.path.join(savepath, filename), activities)
 
-        return None
+    return None
 
+
+def main():
+    import_raw(17)
+
+    quit()
 
 def getNetworkActivity(data, num_networks, hcp=False):
+    """
+    Averages activation across either the Yeo 7 or Yeo 17 networks at each timepoint in the data
+
+    Args:
+        data: a num_timepoints x num_ROIs numpy array of data
+        num_networks: int (7 or 17) indicating whether to use 7- or 17-network Yeo parcellation
+        hcp: whether the data come from the HCP (True) or MyConnectome (False) datasets
+
+    Returns:
+        A num_timepoints x num_networks numpy array of the network-averaged data
+    """
     if hcp:
         parcellation = f"Yeo_networks{num_networks}"
-        path = os.path.join(root, "data/HCP/parcel_data_hcp.txt")
+        path = os.path.join(data_root, "HCP/parcel_data_hcp.txt")
     else:
         parcellation = f"{num_networks}networks"
-        path = os.path.join(root, "data/MyConnectome/parcel_data.txt")
+        path = os.path.join(data_root, "MyConnectome/parcel_data.txt")
     parcels = pd.read_table(path)[parcellation]
     roughnetworks = pd.unique(parcels)
     if hcp:
         roughnetworks = np.delete(
             roughnetworks, np.where(roughnetworks == "No network found")
         )
+    roughnetworks.sort() #to ensure a consistent order for the networks in averaged data
     activities = []
-    # assert that length of parcels and #features in data are the same
     for network in roughnetworks:
         if network.lower().startswith(parcellation) or hcp:
             netactivity = np.average(data[:, (parcels == network)], axis=1).reshape(
@@ -151,28 +165,12 @@ def gsr(data):
         gsr_data: A numpy array of fMRI data with global signal regressed out
     """
     gsignal = np.average(data, axis=1)
-    print(np.shape(gsignal))
     gsignal = np.reshape(gsignal, (-1, 1))
     ginverse = np.linalg.inv(gsignal.T @ gsignal) @ gsignal.T
     beta = ginverse @ data
-    print(np.shape(gsignal))
-    print(np.dot(data[:,0] - gsignal*beta[0], gsignal))
-
-    reg = LinearRegression().fit(gsignal, data)
     gsr_data = data - gsignal @ beta
-    reg = LinearRegression().fit(gsignal, gsr_data)
-    #run regression between gsr and global signal and make sure it's 0 with scikit-learn
-
-
     return gsr_data
 
-def main():
-    test_array = np.random.rand(10,10)
-    gsr(test_array)
-
-
-
-    quit()
 
 def split_data(num_networks):
     path = os.path.join(root, "data", f"data{num_networks}")
