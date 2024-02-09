@@ -61,10 +61,8 @@ def import_tuesthurs(num_networks, split=False):
     thurs_data = []
     for file_name in os.listdir(path):
         if file_name[6] == "t":
-            print(f"tues file: {file_name}")
             tues_data.append(np.loadtxt(os.path.join(path, file_name)))
         if file_name[6] == "r":
-            print(f"thurs file: {file_name}")
             thurs_data.append(np.loadtxt(os.path.join(path, file_name)))
     return tues_data, thurs_data
 
@@ -138,7 +136,7 @@ def get_network_activity(data, num_networks, hcp=False):
         roughnetworks = np.delete(
             roughnetworks, np.where(roughnetworks == "No network found")
         )
-    roughnetworks.sort() #to ensure a consistent order for the networks in averaged data
+    roughnetworks.sort() # to ensure a consistent order for the networks in averaged data
     activities = []
     for network in roughnetworks:
         if network.lower().startswith(parcellation) or hcp:
@@ -287,7 +285,7 @@ def fit_all_models(hmm, params, props, data, ar=False, num_iters=100):
     return params
 
 
-def init_transonly(emissions, probs, ar, lags=1):
+def init_transonly(emissions, probs, ar=False, lags=1):
     """
     Initializes and HMM for transition matrix-only fitting
 
@@ -336,35 +334,52 @@ def init_transonly(emissions, probs, ar, lags=1):
 
     return hmm, params, props
 
-def main():
-    data = import_all(17)
-    states = np.arange(2,13)
-    for state in states:
-        get_params(data, state, ar=False)
 
+def logprob_all_models(hmm, params, data, ar=False):
+    """
+    Calculates the log likelihood of a particular run of data under a specified model
 
+    Args:
+        hmm: a dynamax HMM object
+        params: the parameters of the HMM
+        data: a num_timepoints x num_networks numpy array
+        ar: whether or not the model is autoregressive
 
-
-
-
-def logprob_all_models(hmm, params, data, ar):
+    Returns:
+        an int, the log likelihood of the data under the model
+    """
     if ar:
         inputs = hmm.compute_inputs(data)
         return hmm.marginal_log_prob(params, data, inputs=inputs)
     return hmm.marginal_log_prob(params, data)
 
 
-def loocv(data1, data2, latdim, trans=False, ar=False, lags=1, key_string=""):
+def loocv(data1, data2, latdim, trans=False, ar=False, lags=1):
+    """
+    Performs leave-one-out cross-validation by fitting a specified HMM to each dataset
+    and classifying test data based on log likelihood under those models
+    Args:
+        data1: list of num_timepoins x num_networks numpy arrays, each of which is a recording made on Tuesday
+        data2: list of num_timepoins x num_networks numpy arrays, each of which is a recording made on Thursday
+        latdim: number of hidden states for the HMM
+        trans: whether to fit a transition matrix-only model
+        ar: whether to fit an autoregressive model
+        lags: if the model is autoregressive, how many lags to include
+
+    Returns:
+        The balanced accuracy of the classifier
+    """
     random.shuffle(data1)
     random.shuffle(data2)
     obsdim = np.shape(data1[0])[1]
-    length = min(len(data1), len(data2)) - 1
+    length = min(len(data1), len(data2)) - 1 # need to train each model on the same amount of data,
+    # otherwise model trained with more data will have the log likelihood advantage
 
     if trans:
         emissions, probs = get_saved_params(
-            np.shape(data1[0])[1], latdim, ar, key_string=key_string
+            np.shape(data1[0])[1], latdim, ar=ar, key_string=""
         )
-        hmm, base_params1, props = init_transonly(emissions, probs, ar)
+        hmm, base_params1, props = init_transonly(emissions, probs, ar=ar)
         base_params2 = base_params1
 
     else:
@@ -373,52 +388,59 @@ def loocv(data1, data2, latdim, trans=False, ar=False, lags=1, key_string=""):
         else:
             hmm = DiagonalGaussianHMM(latdim, obsdim)
 
-        base_params1, props = hmm.initialize(
-            key=get_key(), method="kmeans", emissions=np.array(data1[:length])
-        )
-        base_params2, _ = hmm.initialize(
+        base_params2, props = hmm.initialize(
             key=get_key(), method="kmeans", emissions=np.array(data2[:length])
         )
 
     correct1 = 0
-    params2 = fit_all_models(hmm, base_params2, props, np.array(data2[:length]), ar)
+    params2 = fit_all_models(hmm, base_params2, props, np.array(data2[:length]), ar=ar)
     for i in range(len(data1)):
         temp = data1.copy()
         temp.pop(i)
         random.shuffle(temp)
-        params1 = fit_all_models(hmm, base_params1, props, np.array(temp[:length]), ar)
-        if logprob_all_models(hmm, params1, data1[i], ar) > logprob_all_models(
-                hmm, params2, data1[i], ar
-        ):
+        if not trans:
+            base_params1, _ = hmm.initialize(key=get_key(), method="kmeans", emissions=np.array(temp[:length]))
+        params1 = fit_all_models(hmm, base_params1, props, np.array(temp[:length]), ar=ar)
+        if logprob_all_models(hmm, params1, data1[i], ar=ar) > logprob_all_models(hmm, params2, data1[i], ar=ar):
             correct1 += 1
+
+    if not trans:
+        base_params1, _ = hmm.initialize(
+            key=get_key(), method="kmeans", emissions=np.array(data1[:length])
+        )
+
     correct2 = 0
-    params1 = fit_all_models(hmm, base_params1, props, np.array(data1[:length]), ar)
+    params1 = fit_all_models(hmm, base_params1, props, np.array(data1[:length]), ar=ar)
     for i in range(len(data2)):
         temp = data2.copy()
         temp.pop(i)
         random.shuffle(temp)
-        params2 = fit_all_models(hmm, base_params2, props, np.array(temp[:length]), ar)
-        if logprob_all_models(hmm, params1, data2[i], ar) < logprob_all_models(
-                hmm, params2, data2[i], ar
-        ):
+        if not trans:
+            base_params2, _ = hmm.initialize(key=get_key(), method="kmeans", emissions=np.array(temp[:length]))
+        params2 = fit_all_models(hmm, base_params2, props, np.array(temp[:length]), ar=ar)
+        if logprob_all_models(hmm, params1, data2[i], ar=ar) < logprob_all_models(hmm, params2, data2[i], ar=ar):
             correct2 += 1
-    print(
-        np.average(
-            [
-                correct1 / (correct1 + len(data2) - correct2),
-                correct2 / (correct2 + len(data1) - correct1),
-            ]
-        )
-    )
-    return np.average(
-        [
-            correct1 / (correct1 + len(data2) - correct2),
-            correct2 / (correct2 + len(data1) - correct1),
-        ]
-    )
+
+    return np.average([correct1 / len(data1), correct2 / len(data2)])
 
 
-def loocv_batch(data1, data2, latdim, trans=False, ar=False, lags=1, key_string=""):
+def loocv_batch(data1, data2, latdim, trans=False, ar=False, lags=1):
+    """
+    Performs leave-one-out cross-validation by fitting a specified HMM to each dataset
+    and classifying test data based on log likelihood under those models
+    in a batched manner that takes advanted of Jax parallelization
+
+    Args:
+        data1: list of num_timepoins x num_networks numpy arrays, each of which is a recording made on Tuesday
+        data2: list of num_timepoins x num_networks numpy arrays, each of which is a recording made on Thursday
+        latdim: number of hidden states for the HMM
+        trans: whether to fit a transition matrix-only model
+        ar: whether to fit an autoregressive model
+        lags: if the model is autoregressive, how many lags to include
+
+    Returns:
+        The balanced accuracy of the classifier\
+    """
     random.shuffle(data1)
     random.shuffle(data2)
     obsdim = np.shape(data1[0])[1]
@@ -434,9 +456,7 @@ def loocv_batch(data1, data2, latdim, trans=False, ar=False, lags=1, key_string=
     )
 
     if trans:
-        emissions, probs = get_saved_params(
-            np.concatenate((data1, data2), axis=0), latdim, ar, key_string=key_string
-        )
+        emissions, probs = get_saved_params(np.shape(data1[0])[1], latdim, ar=ar, key_string="")
         hmm, params, props = init_transonly(emissions, probs, ar)
 
     else:
@@ -449,12 +469,12 @@ def loocv_batch(data1, data2, latdim, trans=False, ar=False, lags=1, key_string=
             key=get_key(), method="kmeans", emissions=data1[:length, :, :]
         )
 
-    params1 = fit_all_models(hmm, params, props, data1[:length, :, :], ar)
+    params1 = fit_all_models(hmm, params, props, data1[:length, :, :], ar=ar)
     if not trans:
         params, _ = hmm.initialize(
             key=get_key(), method="kmeans", emissions=data2[:length, :, :]
         )
-    params2 = fit_all_models(hmm, params, props, data2[:length, :, :], ar)
+    params2 = fit_all_models(hmm, params, props, data2[:length, :, :], ar=ar)
 
     def _fit_fold(train, test, comp_params):
         para = params
@@ -473,20 +493,20 @@ def loocv_batch(data1, data2, latdim, trans=False, ar=False, lags=1, key_string=
     correct2 = jnp.sum(
         vmap(_fit_fold, in_axes=[0, 0, None])(data2_train, data2, params1)
     )
-    print(
-        np.average(
-            [
-                correct1 / (correct1 + len(data2) - correct2),
-                correct2 / (correct2 + len(data1) - correct1),
-            ]
-        )
-    )
-    return np.average(
-        [
-            correct1 / (correct1 + len(data2) - correct2),
-            correct2 / (correct2 + len(data1) - correct1),
-        ]
-    )
+
+    return np.average([correct1 / len(data1), correct2 / len(data2)])
+
+
+def main():
+    tues, thurs = import_tuesthurs(7)
+    total = 0
+    for i in range(30):
+        acc = loocv(tues, thurs, 4)
+        print(acc)
+        total += acc
+    print("average:")
+    print(total / 30)
+
 
 
 def svmcv(data1, data2):
