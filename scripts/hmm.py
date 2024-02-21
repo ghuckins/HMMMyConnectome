@@ -20,7 +20,7 @@ warnings.filterwarnings("ignore")
 from src.dynamax.hidden_markov_model.models.gaussian_hmm import DiagonalGaussianHMM
 from src.dynamax.hidden_markov_model.models.arhmm import LinearAutoregressiveHMM
 
-root = "/Users/gracehuckins/Documents/HMMMyConnectome"
+root = "/Users/gracehuckins/PycharmProjects/HMMMyConnectome"
 data_root = "/Users/gracehuckins/Documents/Research Data"
 
 
@@ -610,6 +610,7 @@ def permtest(data1, data2, class_func, reps=50, latdim=6, trans=False, ar=False)
     permaccs = []
 
     for i in range(reps):
+        print(i)
         alldatas = data1 + data2
         random.shuffle(alldatas)
         data1 = alldatas[:length]
@@ -622,7 +623,7 @@ def permtest(data1, data2, class_func, reps=50, latdim=6, trans=False, ar=False)
         permaccs.append(acc)
 
     plt.hist(permaccs, bins=50)
-    plt.axvline(x=realacc)
+    plt.axvline(x=realacc, color="red")
     plt.show()
     return np.average(permaccs)
 
@@ -788,6 +789,8 @@ def plot_class_acc(dataframe):
 
 def main():
     tues, thurs = import_tuesthurs(7)
+    permtest(tues, thurs, loocv_batch, reps=50, latdim=6, ar=True, trans=False)
+    quit()
     reps = 5
     states = np.arange(2,7)
     for state in states:
