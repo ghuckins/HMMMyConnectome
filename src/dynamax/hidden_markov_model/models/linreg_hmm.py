@@ -132,9 +132,9 @@ class LinearRegressionHMMEmissions(HMMEmissions):
                 Sigma = 0.5 * (Sigma + Sigma.T)                 # for numerical stability
                 return Ab[:, :-1], Ab[:, -1], Sigma
 
-        emission_stats = pytree_sum(batch_stats, axis=0)
-        As, bs, Sigmas = vmap(_single_m_step)(emission_stats)
-        params = params._replace(weights=As, biases=bs, covs=Sigmas)
+            emission_stats = pytree_sum(batch_stats, axis=0)
+            As, bs, Sigmas = vmap(_single_m_step)(emission_stats)
+            params = params._replace(weights=As, biases=bs, covs=Sigmas)
         return params, m_step_state
 
 
