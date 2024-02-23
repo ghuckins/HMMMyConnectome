@@ -788,9 +788,11 @@ def plot_class_acc(dataframe):
     return None
 
 def main():
-    tues, thurs = import_tuesthurs(7)
-    permtest(tues, thurs, loocv_batch, reps=50, latdim=6, ar=True, trans=False)
-    quit()
+    dir = os.path.join(data_root, "HCP")
+    for file in os.listdir(dir):
+        data = np.load(os.path.join(dir,file))
+        get_network_activity(data, 7, hcp=True)
+        quit()
     reps = 5
     states = np.arange(2,7)
     for state in states:

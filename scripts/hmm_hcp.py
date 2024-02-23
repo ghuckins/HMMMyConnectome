@@ -46,10 +46,7 @@ def import_raw_hcp(num_networks):
         else:
             files[file_key] = [file]
 
-    #I want to fix all of this held-out stuff to hold out raw data according to same pattern by which data was previously  held out
-    #FIX FIX FIX FIX
-
-    savepath = os.path.join(root, "data", f"hcpdata{num_networks}")
+    savepath = os.path.join(root, "data", f"hcpdata{num_networks}_2")
 
     if not os.path.exists(savepath):
         os.mkdir(savepath)
@@ -372,6 +369,10 @@ def loohcp_batch(data, latdim, num_subjs, trans=False, ar=False, lags=1):
 
 
 def main():
+    import_raw_hcp(17)
+
+    quit()
+
     data = import_hcp(7)
     reps = 10
     batch = 0
