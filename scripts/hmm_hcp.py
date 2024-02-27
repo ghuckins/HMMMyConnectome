@@ -139,9 +139,9 @@ def alt_params(data, latdim, trans=False, ar=False):
     if not os.path.exists(dir):
         os.mkdir(dir)
 
-    filepath = os.path.join(dir,f"params{latdim}")
+    filepath = os.path.join(dir, f"params{latdim}")
     if not os.path.exists(filepath):
-        print(f"fitting params {latdim}{trans}{ar}")
+        print(f"fitting params {latdim} " + ar_str + " " + trans_str)
         params = {}
 
         if trans:
@@ -369,26 +369,17 @@ def loohcp_batch(data, latdim, num_subjs, trans=False, ar=False, lags=1):
 
 
 def main():
-    import_raw_hcp(17)
-
-    quit()
-
     data = import_hcp(7)
     reps = 10
     batch = 0
     baseline = 0
     for rep in range(reps):
-        batch += loohcp_batch(data, 6, 10, ar=False, trans=False)
-        baseline += loohcp(data, 6, 10, ar=False, trans=False)
+        batch += loohcp_batch(data, 4, 10, ar=True, trans=False)
+        baseline += loohcp(data, 4, 10, ar=True, trans=False)
     print(f"batch acc: {batch/reps}")
     print(f"baseline acc: {baseline/reps}")
 
     quit()
-
-    alt_params(data, 6, trans=False, ar=False)
-    quit()
-
-
 
 
 def baseline_fingerprint(num_networks, num_subjs):

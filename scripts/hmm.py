@@ -140,6 +140,7 @@ def get_network_activity(data, num_networks, hcp=False):
             roughnetworks, np.where(roughnetworks == "No network found")
         )
     roughnetworks.sort() # to ensure a consistent order for the networks in averaged data
+    print(roughnetworks)
     activities = []
     for network in roughnetworks:
         if network.lower().startswith(parcellation) or hcp:
@@ -210,16 +211,12 @@ def get_params(data, latdim, ar=False, key_string="", lags=1):
     if not os.path.exists(path):
         os.mkdir(path)
 
-    params, props = hmm.initialize(
-        key=get_key(), method="kmeans", emissions=np.array(data)
-    )
+    params, props = hmm.initialize(key=get_key(), method="kmeans", emissions=np.array(data))
 
     if ar:
-        params, ll = hmm.fit_em(
-            params, props, np.array(data), inputs=np.array(inputs), num_iters=1000
-        )
+        params, ll = hmm.fit_em(params, props, np.array(data), inputs=np.array(inputs), num_iters=500)
     else:
-        params, ll = hmm.fit_em(params, props, np.array(data), num_iters=1000)
+        params, ll = hmm.fit_em(params, props, np.array(data), num_iters=500)
 
     np.save(os.path.join(path, f"probs{latdim}"), params.initial.probs)
 
@@ -379,9 +376,7 @@ def loocv(data1, data2, latdim, trans=False, ar=False, lags=1):
     # otherwise model trained with more data will have the log likelihood advantage
 
     if trans:
-        emissions, probs = get_saved_params(
-            np.shape(data1[0])[1], latdim, ar=ar, key_string=""
-        )
+        emissions, probs = get_saved_params(np.shape(data1[0])[1], latdim, ar=ar, key_string="")
         hmm, base_params1, props = init_transonly(emissions, probs, ar=ar)
         base_params2 = base_params1
 
@@ -391,9 +386,7 @@ def loocv(data1, data2, latdim, trans=False, ar=False, lags=1):
         else:
             hmm = DiagonalGaussianHMM(latdim, obsdim)
 
-        base_params2, props = hmm.initialize(
-            key=get_key(), method="kmeans", emissions=np.array(data2[:length])
-        )
+        base_params2, props = hmm.initialize(key=get_key(), method="kmeans", emissions=np.array(data2[:length]))
 
     correct1 = 0
     params2 = fit_all_models(hmm, base_params2, props, np.array(data2[:length]), ar=ar)
@@ -408,9 +401,7 @@ def loocv(data1, data2, latdim, trans=False, ar=False, lags=1):
             correct1 += 1
 
     if not trans:
-        base_params1, _ = hmm.initialize(
-            key=get_key(), method="kmeans", emissions=np.array(data1[:length])
-        )
+        base_params1, _ = hmm.initialize(key=get_key(), method="kmeans", emissions=np.array(data1[:length]))
 
     correct2 = 0
     params1 = fit_all_models(hmm, base_params1, props, np.array(data1[:length]), ar=ar)
@@ -628,10 +619,25 @@ def permtest(data1, data2, class_func, reps=50, latdim=6, trans=False, ar=False)
     return np.average(permaccs)
 
 
-def getstats(model, params, datas, num_states, ar):
+def get_stats(hmm, params, datas, ar):
     """
-    THIS FUNCTION IS UNREVIEWED
+    Given a model and data, returns a variety of statistics for the most likely hidden states underlying the data
+    given that model
+    Args:
+        hmm: the hidden markov model
+        params: parameters of the model
+        datas: list of num_timepoins x num_networks numpy arrays for which to find the hidden states
+        ar: whether or not the model is autoregressive
+
+    Returns:
+        avgoccs: list of the average occupancy in each hidden state across all the data in datas
+        stdoccs: list of standard deviations of the occupancies for each hidden state
+        avgdwells: list of the average dwell time in each hidden state across all the data in datas
+        stddwells: list of standard deviations of the dwell times for each hidden state
+        avgchanges: the average number of hidden state transitions per run over all data in datas
+        stdchanges: the standard deviation of the number of hidden state transitions per run
     """
+    num_states = np.shape(params.transitions.transition_matrix)[0]
     changes = []
     occs = []
     dwells = [[]]
@@ -642,8 +648,8 @@ def getstats(model, params, datas, num_states, ar):
     for rep in np.arange(reps):
         for data in datas:
             if ar:
-                input = model.compute_inputs(data)
-            state = model.most_likely_states(params, data, inputs=input)
+                input = hmm.compute_inputs(data)
+            state = hmm.most_likely_states(params, data, inputs=input)
             change = np.nonzero(np.diff(state))
             change = change[0]
             num_change = len(change)
@@ -652,19 +658,12 @@ def getstats(model, params, datas, num_states, ar):
             occs.append(occ)
             for i in range(num_change):
                 if i == 0:
-                    dwells[state[change[0]]].append(change[0])
+                    dwells[state[change[i]]].append(change[0]+1)
                 else:
                     dwells[state[change[i]]].append(change[i] - change[i - 1])
-        avgchanges = np.mean(changes)
-        stdchanges = np.std(changes)
-        avgoccs = np.mean(occs, axis=0)
-        stdoccs = np.std(occs, axis=0)
-        avgdwells = []
-        stddwells = []
-        for item in dwells:
-            avgdwells.append(np.mean(item))
-            stddwells.append(np.std(item))
-        return occs  # avgoccs, avgdwells, avgchanges, stdoccs, stddwells, stdchanges
+            dwells[state[-1]].append(len(state) - change[-1] - 1)
+
+        return occs, dwells, changes
 
 
 def build_dataframe(directory):
@@ -682,11 +681,8 @@ def build_dataframe(directory):
     for filename in os.listdir(directory):
         data = np.loadtxt(os.path.join(directory, filename))
         hidden_states = int(filename.split("_")[-1])
-        method = filename.split("_")[-2]
-        if filename.startswith("b"):
-            model = "full"
-        else:
-            model = filename.split("_")[0]
+        networks = filename.split("_")[-2]
+        model = filename.split("_")[0]
 
         for acc in data:
             df = df.append(
@@ -694,12 +690,54 @@ def build_dataframe(directory):
                     "Classification Accuracy": acc,
                     "Model": model,
                     "Hidden States": hidden_states,
-                    "Method": method
+                    "Networks": networks
                 },
                 ignore_index=True,
             )
     return df
 
+
+def plot_occs(occ1, occ2):
+    """
+    Make a bar plot comparing the occupancies from two datasets
+
+    Args:
+        occ1: a list of arrays, each of which is occupancies from one run of uncaffeinated data
+        occ2: a list of arrays, each of which is occupancies from one run of caffeinated data
+
+    Returns:
+        dataframe: a dataframe that can be reused to plot occupancy data
+    """
+    states = []
+    data = []
+    occs = []
+    for item in occ1:
+        for i in range(0, len(item)):
+            occs.append(item[i]/sum(item))
+            states.append(i)
+            data.append("Uncaffeinated")
+    for item in occ2:
+        for i in range(0, len(item)):
+            occs.append(item[i]/sum(item))
+            states.append(i)
+            data.append("Caffeinated")
+    dict = {"Occupancies": occs, "Hidden States": states, "Dataset": data}
+    dataframe = pd.DataFrame(dict)
+
+    sns.set_theme()
+    colors = [
+        [51 / 255, 34 / 255, 136 / 255],
+        [136 / 255, 204 / 255, 238 / 255],
+        [17 / 255, 119 / 255, 51 / 255],
+        [153 / 255, 153 / 255, 51 / 255],
+        [204 / 255, 102 / 255, 119 / 255],
+        [136 / 255, 34 / 255, 85 / 255],
+    ]
+    sns.set_palette(sns.color_palette(colors))
+    sns.barplot(data=dataframe, x="Hidden States", y="Occupancies", hue="Dataset", errorbar="ci")
+    plt.show()
+
+    return dataframe
 
 def plot_trans_matrix(mat1, mat2):
     """
@@ -763,44 +801,76 @@ def plot_class_acc(dataframe):
         [204 / 255, 102 / 255, 119 / 255],
         [136 / 255, 34 / 255, 85 / 255],
     ]
-    #dataframe = dataframe[dataframe["Method"] == "batch"]
     sns.set_palette(sns.color_palette(colors))
     fig = sns.relplot(
         data=dataframe,
         x="Hidden States",
         y="Classification Accuracy",
-        hue="Method",
-        col="Model",
+        hue="Model",
+        col="Networks",
         kind="line",
-        errorbar="ci",
-    ) #.set_titles("7 Networks", weight="bold", size=14)
+        errorbar="ci"
+    ).set_titles("7 Networks", weight="bold", size=14)
     sns.move_legend(fig, "upper right", bbox_to_anchor=(0.817, 0.93))
     fig.legend.set_title(None)
     fig.legend.set(frame_on=True)
 
     fig.fig.subplots_adjust(top=0.9)
     plt.ylim([0.3, 1])
-    #plt.title("17 Networks", weight="bold", fontsize=14)
+    plt.title("17 Networks", weight="bold", fontsize=14)
 
     fig.tight_layout()
     plt.show()
 
     return None
 
-def main():
-    dir = os.path.join(data_root, "HCP")
-    for file in os.listdir(dir):
-        data = np.load(os.path.join(dir,file))
-        get_network_activity(data, 7, hcp=True)
-        quit()
-    reps = 5
-    states = np.arange(2,7)
-    for state in states:
-        total = 0
-        for rep in range(reps):
-            total += loocv_batch(tues, thurs, state, trans=False, ar=True)
-        print(total / reps)
+def plot_emission_networks(mus):
+    num_states = np.shape(mus)[0]
+    obsdim = np.shape(mus)[1]
+    fig, axs = plt.subplots(1, num_states, subplot_kw=dict(projection="polar"))
+    theta = np.arange(obsdim) / obsdim * 2 * math.pi
+    i = 0
+    while i < num_states:
+        axs[i].set_ylim([-0.5, 0.5])
+        axs[i].plot(theta, mus[i, :])
+        axs[i].set_xticklabels([])
+        axs[i].set_yticklabels([])
+        for t, r in zip(theta, mus[i, :]):
+            axs[i].annotate(str(round(t * 7 / (2 * math.pi) + 1)), xy=[t, r])
+        i += 1
+    if obsdim == 7:
+        networkstring = (
+            "1 - Visual\n"
+            "2 - Somatomotor\n"
+            "3 - Dorsal Attention\n"
+            "4 - Salience / Ventral Attention\n"
+            "5 - Limbic\n"
+            "6 - Control\n"
+            "7 - Default\n"
+        )
+    else:
+        networkstring = (
+            "check"
+        )
+    plt.text(-100, 0, networkstring, fontsize=10)
+    plt.show()
 
+def main():
+    emissions, _ = get_saved_params(7, 5, ar=True, key_string="")
+    plot_emission_networks(emissions.biases)#np.average(emissions.weights,axis=2))
+    quit()
+    tues, thurs = import_tuesthurs(7)
+    emissions, probs = get_saved_params(7, 9, ar=True, key_string="")
+    hmm, params, props = init_transonly(emissions, probs, ar=True)
+    params = fit_all_models(hmm, params, props, jnp.array(tues + thurs), ar=True)
+    tuesoccs, _, _ = get_stats(hmm, params, tues, ar=True)
+    thursoccs, _, _ = get_stats(hmm, params, thurs, ar=True)
+    plot_occs(tuesoccs, thursoccs)
+    quit()
+
+    dir = os.path.join(root, "results", "fits", "MyConnectome")
+    dataframe = build_dataframe(dir)
+    plot_class_acc(dataframe)
 def still_to_edit():
     hm_fc = {}
     hm_fc["t"] = []
