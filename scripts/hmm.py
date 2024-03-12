@@ -681,16 +681,16 @@ def build_dataframe(directory):
     for filename in os.listdir(directory):
         data = np.loadtxt(os.path.join(directory, filename))
         hidden_states = int(filename.split("_")[-1])
-        networks = filename.split("_")[-2]
+        approach = filename.split("_")[-2]
         model = filename.split("_")[0]
 
         for acc in data:
             df = df.append(
                 {
                     "Classification Accuracy": acc,
-                    "Model": model,
+                    "Approach": approach,
                     "Hidden States": hidden_states,
-                    "Networks": networks
+                    "Model": model
                 },
                 ignore_index=True,
             )
@@ -806,18 +806,18 @@ def plot_class_acc(dataframe):
         data=dataframe,
         x="Hidden States",
         y="Classification Accuracy",
-        hue="Model",
-        col="Networks",
+        hue="Approach",
+        col="Model",
         kind="line",
         errorbar="ci"
-    ).set_titles("7 Networks", weight="bold", size=14)
+    )#.set_titles("7 Networks", weight="bold", size=14)
     sns.move_legend(fig, "upper right", bbox_to_anchor=(0.817, 0.93))
     fig.legend.set_title(None)
     fig.legend.set(frame_on=True)
 
     fig.fig.subplots_adjust(top=0.9)
-    plt.ylim([0.3, 1])
-    plt.title("17 Networks", weight="bold", fontsize=14)
+    plt.ylim([0, 1])
+    #plt.title("17 Networks", weight="bold", fontsize=14)
 
     fig.tight_layout()
     plt.show()
@@ -856,6 +856,21 @@ def plot_emission_networks(mus):
     plt.show()
 
 def main():
+    filename = os.path.join(root, "results", "fits", "MyConnectome", "baseline_17")
+    tues, thurs = import_tuesthurs(17)
+    reps = 100
+    for rep in range(reps):
+        acc = [svmcv(tues, thurs)]
+        with open(filename,"ab") as file:
+            np.savetxt(file, acc)
+
+
+    quit()
+
+
+    df = build_dataframe(os.path.join(root, "results", "fits", "testing_hcp"))
+    plot_class_acc(df)
+    quit()
     emissions, _ = get_saved_params(7, 5, ar=True, key_string="")
     plot_emission_networks(emissions.biases)#np.average(emissions.weights,axis=2))
     quit()
@@ -871,98 +886,7 @@ def main():
     dir = os.path.join(root, "results", "fits", "MyConnectome")
     dataframe = build_dataframe(dir)
     plot_class_acc(dataframe)
-def still_to_edit():
-    hm_fc = {}
-    hm_fc["t"] = []
-    hm_fc["r"] = []
-    nohm_fc = {}
-    nohm_fc["t"] = []
-    nohm_fc["r"] = []
 
-    path1 = os.path.join(root, "results", "data7_split")
-    path2 = os.path.join(root, "results", "data7")
-    thresh = 100
-
-    for filename in os.listdir(path2):
-        if filename[6] != "t" and filename[6] != "r":
-            continue
-
-        data = np.loadtxt(os.path.join(path2, filename))
-        num = 0
-        hm_pos = 0
-        while os.path.exists(os.path.join(path1, filename[:7] + f"_{num}.txt")):
-            data1 = np.loadtxt(os.path.join(path1, filename[:7] + f"_{num}.txt"))
-            counter = 1
-            while counter <= len(data1) / thresh:
-                hm_pos += 1
-                nohmdata = data1[(counter - 1) * thresh: (counter) * thresh]
-                hmdata = data[(hm_pos - 1) * thresh: (hm_pos) * thresh]
-                nohm_fc[filename[6]].append(np.corrcoef(nohmdata.T)[np.triu_indices(7)])
-                hm_fc[filename[6]].append(np.corrcoef(hmdata.T)[np.triu_indices(7)])
-                counter += 1
-            num += 1
-
-    bl_motion = []
-    bl_nomotion = []
-    reps = 10
-    for rep in range(reps):
-        bl_motion.append(svmcv(hm_fc["t"], hm_fc["r"]))
-        bl_nomotion.append(svmcv(nohm_fc["t"], nohm_fc["r"]))
-        print(bl_motion[-1])
-        print(bl_nomotion[-1])
-    np.savetxt(
-        os.path.join(root, "results", "fits", "hmm7_split", "bl_motion"), bl_motion
-    )
-    np.savetxt(
-        os.path.join(root, "results", "fits", "hmm7_split", "bl_nomotion"), bl_nomotion
-    )
-    quit()
-
-    tues, thurs = import_tuesthurs(17)
-    all_data = tues.copy()
-    all_data.extend(thurs)
-
-    emissions, probs = get_saved_params(tues, 4, True)
-    hmm, params, props = init_transonly(emissions, probs, True)
-    params = fit_all_models(hmm, params, props, np.array(all_data), True)
-
-    sns.set_theme()
-    colors = [
-        [51 / 255, 34 / 255, 136 / 255],
-        [136 / 255, 204 / 255, 238 / 255],
-        [17 / 255, 119 / 255, 51 / 255],
-        [153 / 255, 153 / 255, 51 / 255],
-        [204 / 255, 102 / 255, 119 / 255],
-        [136 / 255, 34 / 255, 85 / 255],
-    ]
-    sns.set_palette(sns.color_palette(colors))
-
-    tuesoccs = np.array(getstats(hmm, params, tues, 4, True)) / 518
-    thursoccs = getstats(hmm, params, thurs, 4, True)
-    tuesoccs = tuesoccs.reshape(-1, 1)
-    tuesstates = np.array([[0, 1, 2, 3] * 30]).T
-    thursoccs = np.array(getstats(hmm, params, thurs, 4, True)) / 518
-    thursoccs = thursoccs.reshape(-1, 1)
-    alloccs = np.concatenate((tuesoccs, thursoccs), axis=0)
-    thursstates = np.array([[0, 1, 2, 3] * 23]).T
-    allstates = np.concatenate((tuesstates, thursstates), axis=0)
-    labels = ["Uncaffeinated"] * 120
-    labels.extend(["Caffeinated"] * 92)
-    occsdict = {}
-    occsdict["Occupancy"] = alloccs.flatten()
-    occsdict["State"] = allstates.flatten()
-    occsdict["Label"] = labels
-    print(len(occsdict["Occupancy"]))
-    print(len(occsdict["State"]))
-    print(len(occsdict["Label"]))
-    occsdf = pd.DataFrame(data=occsdict)
-    ax = sns.barplot(
-        occsdf, x="State", y="Occupancy", hue="Label", estimator="mean", errorbar="ci"
-    )
-    # fig.legend.set_title(None)
-    ax.legend(title=None)
-    plt.savefig("./results/figs/OHBM occupancies TRANSPARENT", facecolor=(1, 1, 1, 0))
-    plt.show()
 
 if __name__ == "__main__":
     main()
