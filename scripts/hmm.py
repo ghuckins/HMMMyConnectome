@@ -668,7 +668,6 @@ def get_stats(hmm, params, datas, ar):
 
 def build_dataframe(directory):
     """
-    NOT VERIFIED! UPDATE AND CHECK BASED ON NAMING SCHEME I END UP USING
     Builds a dataframe from a directory of classification accuracy files
 
     Args:
@@ -680,24 +679,70 @@ def build_dataframe(directory):
     df = pd.DataFrame()
     for filename in os.listdir(directory):
         data = np.loadtxt(os.path.join(directory, filename))
-        hidden_states = int(filename.split("_")[-1])
-        approach = filename.split("_")[-2]
-        model = filename.split("_")[0]
+        if filename[0] != "b":
+            hidden_states = int(filename.split("_")[-1])
+            networks = filename.split("_")[-2]
+            model = filename.split("_")[0]
 
-        for acc in data:
-            df = df.append(
-                {
-                    "Classification Accuracy": acc,
-                    "Approach": approach,
-                    "Hidden States": hidden_states,
-                    "Model": model
-                },
-                ignore_index=True,
-            )
+            if model == "ar":
+                model = "Autoregressive, Full"
+            elif model == "artrans":
+                model = "Autoregressive, Trans Only"
+            elif model == "full":
+                model = "Gaussian, Full"
+            elif model == "trans":
+                model = "Gaussian, Trans Only"
+
+            for acc in data:
+                df = df.append(
+                    {
+                        "Classification Accuracy": acc,
+                        "Networks": networks,
+                        "Hidden States": hidden_states,
+                        "Model": model
+                    },
+                    ignore_index=True,
+                )
+        else:
+            states = np.arange(2, 13)
+            networks = filename.split("_")[1]
+            if networks != "512":
+                for state in states:
+                    for acc in data:
+                        df = df.append(
+                            {
+                                "Classification Accuracy": acc,
+                                "Networks": networks,
+                                "Hidden States": state,
+                                "Model": "Baseline"
+                            },
+                            ignore_index=True,
+                        )
+            else:
+                for state in states:
+                    for acc in data:
+                        df = df.append(
+                            {
+                                "Classification Accuracy": acc,
+                                "Networks": "7",
+                                "Hidden States": state,
+                                "Model": "Baseline (512-D)"
+                            },
+                            ignore_index=True,
+                        )
+                        df = df.append(
+                            {
+                                "Classification Accuracy": acc,
+                                "Networks": "17",
+                                "Hidden States": state,
+                                "Model": "Baseline (512-D)"
+                            },
+                            ignore_index=True,
+                        )
     return df
 
 
-def plot_occs(occ1, occ2):
+def plot_occs(latdim, num_networks=7):
     """
     Make a bar plot comparing the occupancies from two datasets
 
@@ -708,6 +753,15 @@ def plot_occs(occ1, occ2):
     Returns:
         dataframe: a dataframe that can be reused to plot occupancy data
     """
+    tues, thurs = import_tuesthurs(num_networks)
+    emissions, probs = get_saved_params(num_networks, latdim, ar=True, key_string="")
+    hmm, base_params, props = init_transonly(emissions, probs, ar=True)
+    params = fit_all_models(hmm, base_params, props, np.array(tues), ar=True)
+    occ1 = get_stats(hmm, params, tues, ar=True)[0]
+    hmm, base_params, props = init_transonly(emissions, probs, ar=True)
+    params = fit_all_models(hmm, base_params, props, np.array(thurs), ar=True)
+    occ2 = get_stats(hmm, params, thurs, ar=True)[0]
+
     states = []
     data = []
     occs = []
@@ -735,11 +789,14 @@ def plot_occs(occ1, occ2):
     ]
     sns.set_palette(sns.color_palette(colors))
     sns.barplot(data=dataframe, x="Hidden States", y="Occupancies", hue="Dataset", errorbar="ci")
+    plt.title(f"{max(states)+1} States", fontsize=14, weight="bold")
     plt.show()
+
+
 
     return dataframe
 
-def plot_trans_matrix(mat1, mat2):
+def plot_trans_matrix(latdims, num_networks=7):
     """
     Plots two transition matrices, as well as the element-wise magnitude of their difference
     Args:
@@ -749,35 +806,32 @@ def plot_trans_matrix(mat1, mat2):
     Returns:
         None
     """
-    mat1 = np.array(mat1)
-    mat2 = np.array(mat2)
-    np.fill_diagonal(mat1, 0)
-    np.fill_diagonal(mat2, 0)
+    nrows = len(latdims)
+    mats = []
+    tues, thurs = import_tuesthurs(num_networks)
+    for latdim in latdims:
+        mat1 = np.array(get_transmats(tues, latdim, together=True, ar=True))
+        mat2 = np.array(get_transmats(thurs, latdim, together=True, ar=True))
+        np.fill_diagonal(mat1, 0)
+        np.fill_diagonal(mat2, 0)
+        mats.append(mat1)
+        mats.append(mat2)
     sns.set(font_scale=0.75)
-    fig, ax = plt.subplots(ncols=3)
+    fig, ax = plt.subplots(ncols=3, nrows=nrows)
     plt.subplots_adjust(right=0.85)
     cbar_ax = fig.add_axes([0.88, 0.345, 0.03, 0.3])
-    sns.heatmap(
-        mat1, cbar_ax=cbar_ax, ax=ax[0], vmin=0, vmax=0.1, square=True, cmap="viridis"
-    )
-    sns.heatmap(
-        mat2, cbar_ax=cbar_ax, ax=ax[1], vmin=0, vmax=0.1, square=True, cmap="viridis"
-    )
-    sns.heatmap(
-        np.abs(mat2 - mat1),
-        cbar_ax=cbar_ax,
-        vmin=0,
-        vmax=0.1,
-        ax=ax[2],
-        square=True,
-        cmap="viridis",
-    )
-    ax[0].set_title("Uncaffeinated \nRuns", fontsize=10)
-    ax[1].set_title("Caffeinated \nRuns", fontsize=10)
-    ax[2].set_title("Absolute \nDifference", fontsize=10)
-    plt.savefig(
-        "./results/figs/OHBM trans matrices TRANSPARENT", facecolor=(1, 1, 1, 0)
-    )
+    for i in range(nrows):
+        sns.heatmap(mats[2*i], cbar_ax=cbar_ax, ax=ax[i,0], vmin=0, vmax=0.1, square=True, cmap="viridis")
+        sns.heatmap(mats[2*i + 1], cbar_ax=cbar_ax, ax=ax[i,1], vmin=0, vmax=0.1, square=True, cmap="viridis")
+        sns.heatmap(np.abs(mats[2*i + 1] - mats[2*i]), cbar_ax=cbar_ax, vmin=0, vmax=0.1, ax=ax[i,2], square=True, cmap="viridis",)
+
+    ax[0,0].set_title("Uncaffeinated \nRuns", fontsize=10, weight="bold")
+    ax[0,1].set_title("Caffeinated \nRuns", fontsize=10, weight="bold")
+    ax[0,2].set_title("Absolute \nDifference", fontsize=10, weight="bold")
+
+    for i in range(len(latdims)):
+        ax[i,0].set_ylabel(f"{latdims[i]} States", fontsize=10, weight="bold")
+
     plt.show()
 
     return None
@@ -806,18 +860,18 @@ def plot_class_acc(dataframe):
         data=dataframe,
         x="Hidden States",
         y="Classification Accuracy",
-        hue="Approach",
-        col="Model",
+        hue="Model",
+        col="Networks",
         kind="line",
         errorbar="ci"
-    )#.set_titles("7 Networks", weight="bold", size=14)
-    sns.move_legend(fig, "upper right", bbox_to_anchor=(0.817, 0.93))
+    ).set_titles("7 Networks", weight="bold", size=14)
+    sns.move_legend(fig, "lower right", bbox_to_anchor=(1., 0.15))
     fig.legend.set_title(None)
     fig.legend.set(frame_on=True)
 
     fig.fig.subplots_adjust(top=0.9)
     plt.ylim([0, 1])
-    #plt.title("17 Networks", weight="bold", fontsize=14)
+    plt.title("17 Networks", weight="bold", fontsize=14)
 
     fig.tight_layout()
     plt.show()
@@ -856,37 +910,18 @@ def plot_emission_networks(mus):
     plt.show()
 
 def main():
-    filename = os.path.join(root, "results", "fits", "MyConnectome", "baseline_17")
-    tues, thurs = import_tuesthurs(17)
-    reps = 100
-    for rep in range(reps):
-        acc = [svmcv(tues, thurs)]
-        with open(filename,"ab") as file:
-            np.savetxt(file, acc)
-
-
-    quit()
-
-
-    df = build_dataframe(os.path.join(root, "results", "fits", "testing_hcp"))
+    df = build_dataframe(os.path.join(root, "results", "fits", "HCP"))
     plot_class_acc(df)
     quit()
-    emissions, _ = get_saved_params(7, 5, ar=True, key_string="")
-    plot_emission_networks(emissions.biases)#np.average(emissions.weights,axis=2))
-    quit()
-    tues, thurs = import_tuesthurs(7)
-    emissions, probs = get_saved_params(7, 9, ar=True, key_string="")
-    hmm, params, props = init_transonly(emissions, probs, ar=True)
-    params = fit_all_models(hmm, params, props, jnp.array(tues + thurs), ar=True)
-    tuesoccs, _, _ = get_stats(hmm, params, tues, ar=True)
-    thursoccs, _, _ = get_stats(hmm, params, thurs, ar=True)
-    plot_occs(tuesoccs, thursoccs)
+
+
     quit()
 
-    dir = os.path.join(root, "results", "fits", "MyConnectome")
-    dataframe = build_dataframe(dir)
-    plot_class_acc(dataframe)
+    #df = build_dataframe(os.path.join(root, "results", "fits", "MyConnectome"))
+    #plot_class_acc(df)
 
+
+    quit()
 
 if __name__ == "__main__":
     main()
