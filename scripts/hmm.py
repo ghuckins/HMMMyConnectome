@@ -351,6 +351,117 @@ def svmcv(data1, data2, data1_oos, data2_oos):
     return np.average([(length - np.sum(y_oos[:length])) / length, np.sum(y_oos[length:]) / len(data2_oos)])
 
 
+def build_dataframe(directory):
+    """
+    NOT VERIFIED! UPDATE AND CHECK BASED ON NAMING SCHEME I END UP USING
+    Builds a dataframe from a directory of classification accuracy files
+
+    Args:
+        directory: the directory containing the classification accuracy files
+
+    Returns:
+        df: a pandas dataframe containing the classification accuracy data
+    """
+    df = pd.DataFrame()
+    for filename in os.listdir(directory):
+        if filename[0] != "b":
+            data = np.loadtxt(os.path.join(directory, filename))
+            hidden_states = int(filename.split("_")[2])
+            networks = filename.split("_")[1]
+            model = filename.split("_")[0]
+
+            model_dict = {"full": "Gaussian, Full", "trans": "Gaussian, Trans Only", "ar": "Autoregressive, Full", "artrans": "Autoregressive, Trans Only"}
+
+            for acc in data:
+                df = df.append(
+                    {
+                        "Classification Accuracy": acc,
+                        "Networks": networks,
+                        "Hidden States": hidden_states,
+                        "Model": model_dict[model]
+                    },
+                    ignore_index=True,
+                )
+        else:
+            data = np.loadtxt(os.path.join(directory, filename))
+            networks = filename.split("_")[1]
+
+            for acc in data:
+                for state in range(2, 13):
+                    if networks != "512":
+                        df = df.append(
+                            {
+                                "Classification Accuracy": acc,
+                                "Networks": networks,
+                                "Hidden States": state,
+                                "Model": "Baseline"
+                            },
+                            ignore_index=True,
+                        )
+                    else:
+                        df = df.append(
+                            {
+                                "Classification Accuracy": acc,
+                                "Networks": "7",
+                                "Hidden States": state,
+                                "Model": "Baseline (512-D)"
+                            },
+                            ignore_index=True,
+                        )
+                        df = df.append(
+                            {
+                                "Classification Accuracy": acc,
+                                "Networks": "17",
+                                "Hidden States": state,
+                                "Model": "Baseline (512-D)"
+                            },
+                            ignore_index=True,
+                        )
+    return df
+
+def plot_class_acc(dataframe):
+    """
+    Plots classification accuracy for different models and numbers of hidden states
+
+    Args:
+        dataframe: a dataframe with columns "Classification Accuracy", "Model", "Hidden States", and "Networks"
+
+    Returns:
+        None
+    """
+    sns.set_theme()
+    colors = [
+        [51 / 255, 34 / 255, 136 / 255],
+        [136 / 255, 204 / 255, 238 / 255],
+        [17 / 255, 119 / 255, 51 / 255],
+        [153 / 255, 153 / 255, 51 / 255],
+        [204 / 255, 102 / 255, 119 / 255],
+        [136 / 255, 34 / 255, 85 / 255],
+    ]
+    sns.set_palette(sns.color_palette(colors))
+    fig = sns.relplot(
+        data=dataframe,
+        x="Hidden States",
+        y="Classification Accuracy",
+        hue="Model",
+        col="Networks",
+        kind="line",
+        errorbar="ci"
+    ).set_titles("7 Networks", weight="bold", size=14)
+    sns.move_legend(fig, "lower right", bbox_to_anchor=(1.0, 0.15))
+    fig.legend.set_title(None)
+    fig.legend.set(frame_on=True)
+
+    fig.fig.subplots_adjust(top=0.9)
+    plt.ylim([0, 1.05])
+    plt.xticks(range(1, 13))
+
+    plt.title("17 Networks", weight="bold", fontsize=14)
+
+    fig.tight_layout()
+    plt.show()
+
+    return None
 def main():
 
     max_states = 12
@@ -372,7 +483,7 @@ def main():
     tues, thurs = import_tuesthurs(num_networks)
     tues_oos, thurs_oos = import_tuesthurs(num_networks, heldout=True)
 
-    num_reps = 50
+    num_reps = 25
 
     svm_acc = []
     for rep in range(num_reps):
