@@ -364,30 +364,33 @@ def build_dataframe(directory):
     """
     df = pd.DataFrame()
     for filename in os.listdir(directory):
-        if filename[0] != "b":
+        if filename[0]!= "b":
             data = np.loadtxt(os.path.join(directory, filename))
             hidden_states = int(filename.split("_")[2])
             networks = filename.split("_")[1]
             model = filename.split("_")[0]
+            motion = filename.split("_")[3]
 
             model_dict = {"full": "Gaussian, Full", "trans": "Gaussian, Trans Only", "ar": "Autoregressive, Full", "artrans": "Autoregressive, Trans Only"}
-
+            motion_dict = {"motion": "Head Motion Interpolated", "nomotion": "Head Motion Censored"}
             for acc in data:
                 df = df.append(
                     {
                         "Classification Accuracy": acc,
                         "Networks": networks,
                         "Hidden States": hidden_states,
-                        "Model": model_dict[model]
+                        "Model": model_dict[model],
+                        "Motion": motion_dict[motion]
                     },
                     ignore_index=True,
                 )
+                """
         else:
             data = np.loadtxt(os.path.join(directory, filename))
             networks = filename.split("_")[1]
 
             for acc in data:
-                for state in range(2, 13):
+                for state in range(2, 9):
                     if networks != "512":
                         df = df.append(
                             {
@@ -416,7 +419,7 @@ def build_dataframe(directory):
                                 "Model": "Baseline (512-D)"
                             },
                             ignore_index=True,
-                        )
+                        ) """
     return df
 
 def plot_class_acc(dataframe):
@@ -443,43 +446,37 @@ def plot_class_acc(dataframe):
         data=dataframe,
         x="Hidden States",
         y="Classification Accuracy",
-        hue="Model",
-        col="Networks",
+        hue="Motion",
+        col="Model",
         kind="line",
         errorbar="ci"
-    ).set_titles("7 Networks", weight="bold", size=14)
-    sns.move_legend(fig, "lower right", bbox_to_anchor=(1.0, 0.15))
+    ).set_titles("Autoregressive", weight="bold", size=14)
+    sns.move_legend(fig, "lower right", bbox_to_anchor=(0.78, 0.15))
     fig.legend.set_title(None)
     fig.legend.set(frame_on=True)
 
     fig.fig.subplots_adjust(top=0.9)
     plt.ylim([0, 1.05])
-    plt.xticks(range(1, 13))
+    plt.xticks(range(2, 13))
 
-    plt.title("17 Networks", weight="bold", fontsize=14)
+    plt.title("Gaussian", weight="bold", fontsize=14)
 
     fig.tight_layout()
     plt.show()
 
     return None
 def main():
-
     max_states = 12
     states = range(2, max_states + 1)
+    num_networks = 7
 
-    data = import_all(7)
-    for state in states:
-        get_params(data, state, key_string="heldout")
-        get_params(data, state, ar=True, key_string="heldout")
-
-    data = import_all(17)
+    data = import_all(num_networks)
     for state in states:
         get_params(data, state, key_string="heldout")
         get_params(data, state, ar=True, key_string="heldout")
 
     savepath = os.path.join(root, "results", "fits", "MyConnectome_OOS")
 
-    num_networks = 7
     tues, thurs = import_tuesthurs(num_networks)
     tues_oos, thurs_oos = import_tuesthurs(num_networks, heldout=True)
 
