@@ -2,8 +2,7 @@ import numpy as np
 import os
 from scipy.stats import zscore
 import pandas as pd
-from hmm import gsr, get_network_activity, get_saved_params, get_key,\
-    fit_all_models, init_transonly, logprob_all_models, get_params
+from hmm import get_saved_params, get_key, fit_all_models, init_transonly, logprob_all_models
 from k_means import kmeans_init
 import random
 import jax.numpy as jnp
@@ -18,52 +17,8 @@ from src.dynamax.hidden_markov_model.models.arhmm import LinearAutoregressiveHMM
 root = "/Users/gracehuckins/PycharmProjects/HMMMyConnectome"
 data_root = "/Users/gracehuckins/Documents/Research Data"
 
-def import_raw_hcp(num_networks):
-    """
-    Imports and preprocesses HCP data by:
-        -applying global signal regression
-        -averaging activity across Yeo networks (according to parcellation specified by num_networks)
-        -z-scoring activity across time for each network
 
-    Args:
-        num_networks: int (7 or 17) indicating whether to use 7- or 17-network Yeo parcellation (or 512 for no parcel)
-
-    Returns:
-        None
-    """
-    path = os.path.join(data_root, "HCP")
-    files = {}
-    for file in os.listdir(path): #sorting data by subject identifier
-        #the point of having this here now is to check that each subj has 4 runs
-        file_key = file[4:10]
-        if file_key in files.keys():
-            files[file_key].append(file)
-        else:
-            files[file_key] = [file]
-
-    savepath = os.path.join(root, "data", f"hcpdata{num_networks}")
-
-    if not os.path.exists(savepath):
-        os.mkdir(savepath)
-
-    for key in files.keys():
-        if len(files[key]) < 4: #if I don't have 4 runs for that subject
-            continue
-        i = 0
-        while i < 4:
-            raw_data = np.load(os.path.join(path, files[key][i]))
-            raw_data = gsr(raw_data)
-            if num_networks == 512:
-                activities = zscore(raw_data, axis=0)
-            else:
-                activities = zscore(get_network_activity(raw_data, num_networks, hcp=True), axis=0)
-            np.savetxt(os.path.join(savepath, f"sub{key}_{i}.txt"), activities)
-            i += 1
-
-    return None
-
-
-def import_hcp(num_networks):
+def import_hcp(num_networks, heldout=False):
     """
     Loads the preprocessed HCP data into a dictionary
 
@@ -73,7 +28,10 @@ def import_hcp(num_networks):
     Returns:
         data: a dict where each key is a subj. identifier and each value is a num_timepoints x num_networks numpy array
     """
-    path = os.path.join(root, "data", f"hcpdata{num_networks}")
+    if heldout:
+        path = os.path.join(root, "data", f"hcpdata{num_networks}_heldout")
+    else:
+        path = os.path.join(root, "data", f"hcpdata{num_networks}")
     if not os.path.exists(path):
         import_raw_hcp(num_networks)
     data = {}
@@ -86,36 +44,16 @@ def import_hcp(num_networks):
     return data
 
 
-def import_randomized(num_networks):
-    """
-
-    TO DELETE AFTER TESTING
-
-    """
-    path = os.path.join(root, "data", f"hcpdata{num_networks}")
-    if not os.path.exists(path):
-        import_raw_hcp(num_networks)
-    data = {}
-    keys = list(import_hcp(num_networks).keys())
-    for key in keys:
-        data[key] = []
-    for file in os.listdir(path):
-        file_key = random.choice(keys)
-        while len(data[file_key]) == 4:
-            file_key = random.choice(keys)
-        data[file_key].append(np.loadtxt(os.path.join(path,file)))
-    return data
-
-
 def alt_params(data, latdim, trans=False, ar=False):
     '''
-    STILL TO FIX
+    Retrieves previously saved model parameters fit to 3/4 scans for each subject in the data dict,
+    or fits new parameters and saves them if they don't already exist
 
     Args:
-        data:
-        latdim:
-        trans:
-        ar:
+        data: a dict of lists of num_timepoints x num_networks numpy arrays, keyed by subject identifier
+        latdim: number of hidden states for the HMM
+        trans: whether to fit a transition matrix-only model
+        ar: whether to fit an autoregressive model
 
     Returns:
         params: a dict of fit parameters for each subject
@@ -285,145 +223,9 @@ def loohcp_1state(data, num_subjs, ar=True, lags=1):
     return correct/(num_subjs*4)
 
 
-def loohcp_confusion(data, latdim, num_subjs, trans=False, ar=False, lags=1):
-    """
-    TO DELETE OR REPLACE
-
-    Performs leave-one-out cross-validation by fitting individual HMMs to 3 runs from each subject in data,
-    and then evaluating whether the 4th run from each subject has the maximum log likelihood under that subject's HMM
-
-    Args:
-        data: a dict of num_timepoints x num_networks numpy arrays, keyed by subject identifier
-        latdim: number of hidden states for the HMM
-        num_subjs: how many subjects from the dict to use for the cross-validation
-        trans: whether to fit a transition matrix-only model
-        ar: whether to fit an autoregressive model
-        lags: if the model is autoregressive, how many lags to include
-
-    Returns:
-        The accuracy of the classifier (chance is 1/num_subjs)
-    """
-    obsdim = np.shape(list(data.values())[0])[2]
-
-    keys = list(data.keys())
-    random.shuffle(keys)
-    keys = keys[:num_subjs]
-    params = {}
-
-    confusion = pd.DataFrame(data=np.zeros((num_subjs,num_subjs)), index=keys, columns=keys)
-
-    if trans:
-        emissions, probs = get_saved_params(obsdim, latdim, ar=ar, key_string="hcp")
-        hmm, base_params, props = init_transonly(emissions, probs, ar=ar)
-
-    else:
-        if ar:
-            hmm = LinearAutoregressiveHMM(latdim, obsdim, num_lags=lags)
-        else:
-            hmm = DiagonalGaussianHMM(latdim, obsdim)
-
-    correct = 0
-    for key in keys:
-        train_data = data[key]
-        random.shuffle(train_data)
-        train_data = train_data[:-1]
-        if not trans:
-            base_params, props = hmm.initialize(key=get_key(), method="kmeans", emissions=np.array(train_data))
-        params[key] = fit_all_models(hmm, base_params, props, np.array(train_data), ar=ar)
-    for key in keys:
-        i = 0
-        while i < len(data[key]):
-            train_data = data[key].copy()
-            test = train_data.pop(i)
-            if not trans:
-                base_params, _ = hmm.initialize(key=get_key(), method="kmeans", emissions=np.array(train_data))
-            loo_params = fit_all_models(hmm, base_params, props, np.array(train_data), ar=ar)
-            log_likelihood = logprob_all_models(hmm, loo_params, test, ar=ar)
-            best_key = key
-            for key2 in keys:
-                if key2 != key:
-                    if log_likelihood <= logprob_all_models(hmm, params[key2], test, ar=ar):
-                        best_key = key2
-            confusion[key][best_key] += 1
-            if key == best_key:
-                correct += 1
-            i = i + 1
-
-    return correct/(num_subjs*4), confusion
-
-
-def loohcp_batch(data, latdim, num_subjs, trans=False, ar=False, lags=1):
-    """
-    Performs leave-one-out cross-validation by fitting individual HMMs to 3 runs from each subject in data,
-    and then evaluating whether the 4th run from each subject has the maximum log likelihood under that subject's HMM
-    in a batched manner that takes advantage of Jax parallelization
-
-    Args:
-        data: a dict of num_timepoints x num_networks numpy arrays, keyed by subject identifier
-        latdim: number of hidden states for the HMM
-        num_subjs: how many subjects from the dict to use for the cross-validation
-        trans: whether to fit a transition matrix-only model
-        ar: whether to fit an autoregressive model
-        lags: if the model is autoregressive, how many lags to include
-
-    Returns:
-        The accuracy of the classifier (chance is 1/num_subjs)
-    """
-    obsdim = np.shape(list(data.values())[0])[2]
-
-    keys = list(data.keys()) #list of keys for all subjects in dataset
-    random.shuffle(keys)
-    keys = keys[:num_subjs] #randomly select num_subjs subjects
-    params = alt_params(data, latdim, trans, ar)
-
-    if trans:
-        emissions, probs = get_saved_params(obsdim, latdim, ar=ar, key_string="hcp")
-        hmm, b_p, pr = init_transonly(emissions, probs, ar=ar)
-
-    else:
-        if ar:
-            hmm = LinearAutoregressiveHMM(latdim, obsdim, num_lags=lags)
-        else:
-            hmm = DiagonalGaussianHMM(latdim, obsdim)
-
-    train = []
-    test = []
-    for key in keys:
-        curr_data = data[key]
-        test.extend(curr_data)
-        curr_data = jnp.array(curr_data)
-        train.extend([jnp.concatenate([curr_data[:i], curr_data[i + 1:]]) for i in range(4)])
-
-    train = jnp.stack(train)
-    test = jnp.stack(test)
-
-    def _fit_fold(train, test, alt_params):
-        #here we test all testing data against all alternative models, including model trained on that subjects' data.
-        #that just made it easier to code up—we account for tihs in calculating accuracy below.
-        if trans:
-            base_params = b_p
-            props = pr
-        else:
-            base_params, props = kmeans_init(hmm, train, get_key(), ar=ar)
-        loo_params = fit_all_models(hmm, base_params, props, train, ar=ar)
-        ll = [logprob_all_models(hmm, loo_params, test, ar=ar)]
-        ll.extend([logprob_all_models(hmm, alt_params[i], test, ar=ar) for i in range(num_subjs)])
-        return jnp.argsort(-jnp.array(ll))
-
-    param_list = [random.choice(params[keys[i]]) for i in range(num_subjs)]
-    ll_sort = vmap(_fit_fold, in_axes=[0, 0, None])(train, test, param_list)
-    indices = jnp.repeat(jnp.arange(num_subjs), 4)+1
-    #2 ways to get correct classification: either the model fit by the other 3 runs on that subject did best (first
-    #element in argsort should be 0) or it did second best, after the alt_params model fit on that subjects' data, which
-    #we didn't really want to fit on anyway. next line of code takes into account those 2 possibilities.
-    correct = jnp.sum((ll_sort[:, 0] == 0).astype(int)) + jnp.dot(jnp.equal(indices,ll_sort[:,0]).astype(int), (ll_sort[:,1] == 0).astype(int))
-    return correct/(num_subjs*4)
-
-
 def baseline_fingerprint(num_networks, num_subjs):
     """
-    Uses correlation of correlations to classify runs of data according to subject identity;
-    accuracy evaluated via leave-one-out cross-validation
+    Uses correlation of correlations to classify runs of data according to subject identity
 
     Args:
         num_networks: int (7, 17, or 512) indicating whether to use 7- or 17-network Yeo parcellation;
@@ -466,13 +268,7 @@ def baseline_fingerprint(num_networks, num_subjs):
 
 
 def main():
-    filename = os.path.join(root, "results", "fits", "HCP", "full_7_1")
-    data = import_hcp(7)
-    reps = 46
-    for rep in range(reps):
-        acc = [loohcp_1state(data, 100, ar=False)]
-        with open(filename,"ab") as file:
-            np.savetxt(file, acc)
+    import_raw_hcp(512)
 
 
 if __name__ == "__main__":
