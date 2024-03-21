@@ -697,31 +697,44 @@ def build_dataframe(directory):
     return df
 
 
-def plot_occs(occ1, occ2):
+def plot_occs(hidden_states, data1, data2):
     """
     Make a bar plot comparing the occupancies from two datasets
 
     Args:
-        occ1: a list of arrays, each of which is occupancies from one run of uncaffeinated data
-        occ2: a list of arrays, each of which is occupancies from one run of caffeinated data
+        hidden_states: a list of numbers of hidden states for which to plot occupancy data
+        data1: a list of num_timepoins x num_networks numpy arrays
+        data2: a list of num_timepoins x num_networks numpy arrays
 
     Returns:
         dataframe: a dataframe that can be reused to plot occupancy data
     """
+    obsdim = np.shape(data1[0])[1]
+
     states = []
     data = []
     occs = []
-    for item in occ1:
-        for i in range(0, len(item)):
-            occs.append(item[i]/sum(item))
-            states.append(i)
-            data.append("Uncaffeinated")
-    for item in occ2:
-        for i in range(0, len(item)):
-            occs.append(item[i]/sum(item))
-            states.append(i)
-            data.append("Caffeinated")
-    dict = {"Occupancies": occs, "Hidden States": states, "Dataset": data}
+    tot_states = []
+
+    for state in hidden_states:
+        emissions, probs = get_saved_params(obsdim, state, ar=True, key_string="")
+        hmm, params, props = init_transonly(emissions, probs, ar=True)
+        params = fit_all_models(hmm, params, props, jnp.array(data1 + data2), ar=True)
+        occ1, _, _ = get_stats(hmm, params, data1, ar=True)
+        occ2, _, _ = get_stats(hmm, params, data2, ar=True)
+        for item in occ1:
+            for i in range(0, len(item)):
+                occs.append(item[i]/sum(item))
+                states.append(i)
+                data.append("Uncaffeinated")
+                tot_states.append(f"{state} States")
+        for item in occ2:
+            for i in range(0, len(item)):
+                occs.append(item[i]/sum(item))
+                states.append(i)
+                data.append("Caffeinated")
+                tot_states.append(f"{state} States")
+    dict = {"Occupancies": occs, "Hidden States": states, "Dataset": data, "Num States": tot_states}
     dataframe = pd.DataFrame(dict)
 
     sns.set_theme()
@@ -734,7 +747,13 @@ def plot_occs(occ1, occ2):
         [136 / 255, 34 / 255, 85 / 255],
     ]
     sns.set_palette(sns.color_palette(colors))
-    sns.barplot(data=dataframe, x="Hidden States", y="Occupancies", hue="Dataset", errorbar="ci")
+    fig = sns.catplot(data=dataframe, x="Hidden States", y="Occupancies", hue="Dataset", errorbar="ci", col="Num States", kind="bar", sharex=False)
+    fig.set_titles("{col_name}")
+    fig.legend.set_title(None)
+    fig.legend.set(frame_on=True)
+    sns.move_legend(fig, "upper right", bbox_to_anchor=(0.9, 0.93))
+    plt.subplots_adjust(wspace=0.1)
+
     plt.show()
 
     return dataframe
@@ -856,6 +875,10 @@ def plot_emission_networks(mus):
     plt.show()
 
 def main():
+    tues, thurs = import_tuesthurs(7)
+    plot_occs([5, 7, 9], tues, thurs)
+    quit()
+
     filename = os.path.join(root, "results", "fits", "MyConnectome", "baseline_17")
     tues, thurs = import_tuesthurs(17)
     reps = 100
@@ -877,7 +900,7 @@ def main():
     tues, thurs = import_tuesthurs(7)
     emissions, probs = get_saved_params(7, 9, ar=True, key_string="")
     hmm, params, props = init_transonly(emissions, probs, ar=True)
-    params = fit_all_models(hmm, params, props, jnp.array(tues + thurs), ar=True)
+    params = fit_all_models(hmm, params, props, jnp.array(tues + thurs), ar=True, trans=True)
     tuesoccs, _, _ = get_stats(hmm, params, tues, ar=True)
     thursoccs, _, _ = get_stats(hmm, params, thurs, ar=True)
     plot_occs(tuesoccs, thursoccs)
