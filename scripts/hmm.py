@@ -470,6 +470,11 @@ def main():
     states = range(2, max_states + 1)
     num_networks = 7
 
+    tues, thurs = import_tuesthurs(num_networks)
+    print(len(tues))
+    print(len(thurs))
+    quit()
+
     data = import_all(num_networks)
     for state in states:
         get_params(data, state, key_string="heldout")
@@ -477,7 +482,7 @@ def main():
 
     savepath = os.path.join(root, "results", "fits", "MyConnectome_OOS")
 
-    tues, thurs = import_tuesthurs(num_networks)
+
     tues_oos, thurs_oos = import_tuesthurs(num_networks, heldout=True)
 
     num_reps = 25
