@@ -480,7 +480,7 @@ def main():
     tues, thurs = import_tuesthurs(num_networks)
     tues_oos, thurs_oos = import_tuesthurs(num_networks, heldout=True)
 
-    num_reps = 25
+    num_reps = 100
 
     svm_acc = []
     for rep in range(num_reps):

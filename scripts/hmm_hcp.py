@@ -271,17 +271,11 @@ def main():
     all_data = is_data | oos_data
     states = range(2,13)
 
-    print(f"Full: {oos_batch(all_data, 2, 100, ho_ids)}")
-    print(f"AR: {oos_batch(all_data, 2, 100, ho_ids, ar=True)}")
-    print(f"Trans: {oos_batch(all_data, 2, 100, ho_ids, trans=True)}")#print(oos_batch(all_data, 2, 10, ho_ids))
-    print(f"AR Trans: {oos_batch(all_data, 2, 100, ho_ids, ar=True, trans=True)}")
-    quit()
-
-    #data_list = [item for key in all_data.keys() for item in all_data[key]]
-    #random.shuffle(data_list)
-    #for state in states:
-    #    get_params(data_list, state, key_string="hcpheldout")
-    #    get_params(data_list, state, ar=True, key_string="hcpheldout")
+    data_list = [item for key in all_data.keys() for item in all_data[key]]
+    random.shuffle(data_list)
+    for state in states:
+        get_params(data_list, state, key_string="hcpheldout")
+        get_params(data_list, state, ar=True, key_string="hcpheldout")
 
     num_subjs = 10
     reps = 1
@@ -299,20 +293,15 @@ def main():
             trans_acc.append(oos_batch(is_data, state, num_subjs, ho_ids, trans=True))
             ar_acc.append(oos_batch(is_data, state, num_subjs, ho_ids, ar=True))
             artrans_acc.append(oos_batch(is_data, state, num_subjs, ho_ids, ar=True, trans=True))
-        print(f"Full: {np.mean(full_acc)}")
-        print(f"Trans: {np.mean(trans_acc)}")
-        print(f"AR: {np.mean(ar_acc)}")
-        print(f"AR Trans: {np.mean(artrans_acc)}")
-        #with open(os.path.join(savepath, f"full_{num_networks}_{state}"), "ab") as file:
-        #    np.savetxt(file, full_acc)
-        #with open(os.path.join(savepath, f"trans_{num_networks}_{state}"), "ab") as file:
-        #    np.savetxt(file, trans_acc)
-        #with open(os.path.join(savepath, f"ar_{num_networks}_{state}"), "ab") as file:
-        #    np.savetxt(file, ar_acc)
-        #with open(os.path.join(savepath, f"artrans_{num_networks}_{state}"), "ab") as file:
-        #    np.savetxt(file, artrans_acc)
+        with open(os.path.join(savepath, f"full_{num_networks}_{state}"), "ab") as file:
+            np.savetxt(file, full_acc)
+        with open(os.path.join(savepath, f"trans_{num_networks}_{state}"), "ab") as file:
+            np.savetxt(file, trans_acc)
+        with open(os.path.join(savepath, f"ar_{num_networks}_{state}"), "ab") as file:
+            np.savetxt(file, ar_acc)
+        with open(os.path.join(savepath, f"artrans_{num_networks}_{state}"), "ab") as file:
+            np.savetxt(file, artrans_acc)
 
-    quit()
     #last, we fit 1-state models
     full_acc = []
     ar_acc = []
