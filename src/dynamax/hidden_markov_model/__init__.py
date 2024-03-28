@@ -1,0 +1,2 @@
+from src.dynamax.hidden_markov_model.parallel_inference import hmm_filter as parallel_hmm_filter
+from src.dynamax.hidden_markov_model.parallel_inference import hmm_smoother as parallel_hmm_smoother

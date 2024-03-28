@@ -1,5 +1,3 @@
-import dynamax
-
 from functools import partial
 
 import jax.numpy as jnp
@@ -7,11 +5,11 @@ import jax.random as jr
 import matplotlib.pyplot as plt
 from jax import vmap
 
-from dynamax.hidden_markov_model import GaussianHMM
-from dynamax.hidden_markov_model import DiagonalGaussianHMM
-from dynamax.hidden_markov_model import SphericalGaussianHMM
-from dynamax.hidden_markov_model import SharedCovarianceGaussianHMM
-from dynamax.utils.plotting import CMAP, COLORS, white_to_color_cmap
+from src.dynamax import GaussianHMM
+from src.dynamax import DiagonalGaussianHMM
+from src.dynamax import SphericalGaussianHMM
+from src.dynamax import SharedCovarianceGaussianHMM
+from src.dynamax import CMAP, COLORS, white_to_color_cmap
 
 
 # Helper functions for plotting

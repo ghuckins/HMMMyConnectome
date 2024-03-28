@@ -14,151 +14,198 @@ from jax import vmap
 from k_means import kmeans_init
 import seaborn as sns
 
-from dynamax.hidden_markov_model import DiagonalGaussianHMM
-from dynamax.hidden_markov_model import LinearAutoregressiveHMM
+import warnings
+warnings.filterwarnings("ignore")
 
-root = "/Users/gracehuckins/Documents/HMMMyConnectome"
+from src.dynamax.hidden_markov_model.models.gaussian_hmm import DiagonalGaussianHMM
+from src.dynamax.hidden_markov_model.models.arhmm import LinearAutoregressiveHMM
+
+root = "/Users/gracehuckins/PycharmProjects/HMMMyConnectome"
+data_root = "/Users/gracehuckins/Documents/Research Data"
+
+
 def import_all(num_networks):
-    '''
+    """
+    Imports all the MyConnectome data as a single list of numpy arrays
 
     Args:
-        num_networks: 7 or 17, to import 7- or 17-network parcellation
+        num_networks: int (7 or 17) indicating whether to import 7- or 17-network parcellation
 
     Returns:
         data: list of numpy arrays, each array is one recording
-
-    '''
-    path = os.path.join(root,"results", f"data{num_networks}")
+    """
+    path = os.path.join(root, "data", f"data{num_networks}")
     if not os.path.exists(path):
         os.mkdir(path)
         import_raw(num_networks)
     data = []
     for file_name in os.listdir(path):
-        data.append(np.loadtxt(os.path.join(path,file_name)))
+        data.append(np.loadtxt(os.path.join(path, file_name)))
     return data
 
-def import_tuesthurs(num_networks,split=False):
-    '''
+
+def import_tuesthurs(num_networks, split=False):
+    """
+    Separately imports MyConnectome Tuesday and Thursday recordings into individual lists
 
     Args:
-        num_networks: 7 or 17, to import 7- or 17-network parcellation
-        split: whether to import split data
+        num_networks: int (7 or 17) indicating whether to import 7- or 17-network parcellation
+        split: whether to import split data (which consists only of continuous recordings below head-motion threshold)
 
     Returns:
-        tues_data: a list of numpy arrays, each of which is a recording made on tuesday
-        thurs_data: a list of numpy arrays, each of which is a recording made on thursday
-    '''
+        tues_data: a list of numpy arrays, each of which is a recording made on Tuesday
+        thurs_data: a list of numpy arrays, each of which is a recording made on Thursday
+    """
     if split:
-        path = os.path.join(root, "results", f"data{num_networks}_split")
+        path = os.path.join(root, "data", f"data{num_networks}_split")
     else:
-        path = os.path.join(root,"results",f"data{num_networks}")
+        path = os.path.join(root, "data", f"data{num_networks}")
     tues_data = []
     thurs_data = []
-    for filename in os.listdir(path):
-        if filename[6] == "t":
-            tues_data.append(np.loadtxt(os.path.join(path,filename)))
-        if filename[6] == "r":
-            thurs_data.append(np.loadtxt(os.path.join(path,filename)))
+    for file_name in os.listdir(path):
+        if file_name[6] == "t":
+            tues_data.append(np.loadtxt(os.path.join(path, file_name)))
+        if file_name[6] == "r":
+            thurs_data.append(np.loadtxt(os.path.join(path, file_name)))
     return tues_data, thurs_data
 
+
 def import_raw(num_networks):
-    print("importing")
-    path = os.path.join(root,"data/MyConnectome")
+    """
+    Imports and preprocesses MyConnectome data by:
+        -applying global signal regression
+        -averaging activity across Yeo networks (according to parcellation specified by num_networks)
+        -z-scoring activity across time for each network
+        -appending a "t" or "r" to each filename to indicate whether the recording was made on Tuesday or Thursday
+
+    Args:
+        num_networks: int (7 or 17) indicating whether to use 7- or 17-network Yeo parcellation
+
+    Returns:
+        None
+    """
+    path = os.path.join(data_root, "MyConnectome")
     metadata = pd.read_table(os.path.join(path, "trackingdata_goodscans.txt"))
     metadata = metadata.set_index("subcode")
-    savepath = os.path.join(root, "results", f"data{num_networks}")
+    savepath = os.path.join(root, "data", f"data{num_networks}")
+
     if not os.path.exists(savepath):
         os.mkdir(savepath)
 
     for filename in os.listdir(path):
         if filename.startswith("sub"):
-            day = metadata.loc[filename.replace(".txt","")]["day_of_week"]
-            raw_data = np.loadtxt(os.path.join(path,filename))
+            day = metadata.loc[filename.replace(".txt", "")]["day_of_week"]
+            raw_data = np.loadtxt(os.path.join(path, filename))
             raw_data = gsr(raw_data)
-            activities = zscore(getNetworkActivity(raw_data, num_networks), axis=0)
+            activities = zscore(get_network_activity(raw_data, num_networks), axis=0)
 
             if day == "2":
-                np.savetxt(os.path.join(savepath, filename.replace(".txt","t.txt")), activities)
+                np.savetxt(
+                    os.path.join(savepath, filename.replace(".txt", "t.txt")),
+                    activities,
+                )
             elif day == "4":
-                np.savetxt(os.path.join(savepath, filename.replace(".txt","r.txt")), activities)
+                np.savetxt(
+                    os.path.join(savepath, filename.replace(".txt", "r.txt")),
+                    activities,
+                )
             else:
                 np.savetxt(os.path.join(savepath, filename), activities)
 
-def getNetworkActivity(data, num_networks, hcp = False):
+    return None
+
+
+def get_network_activity(data, num_networks, hcp=False):
+    """
+    Averages activation across either the Yeo 7 or Yeo 17 networks at each timepoint in the data
+
+    Args:
+        data: a num_timepoints x num_ROIs numpy array of data
+        num_networks: int (7 or 17) indicating whether to use 7- or 17-network Yeo parcellation
+        hcp: whether the data come from the HCP (True) or MyConnectome (False) datasets
+
+    Returns:
+        A num_timepoints x num_networks numpy array of the network-averaged data
+    """
     if hcp:
         parcellation = f"Yeo_networks{num_networks}"
-        path = os.path.join(root,"data/HCP/parcel_data_hcp.txt")
+        path = os.path.join(data_root, "HCP/parcel_data_hcp.txt")
     else:
         parcellation = f"{num_networks}networks"
-        path = os.path.join(root,"data/MyConnectome/parcel_data.txt")
+        path = os.path.join(data_root, "MyConnectome/parcel_data.txt")
     parcels = pd.read_table(path)[parcellation]
     roughnetworks = pd.unique(parcels)
     if hcp:
-        roughnetworks = np.delete(roughnetworks, np.where(roughnetworks=='No network found'))
+        roughnetworks = np.delete(
+            roughnetworks, np.where(roughnetworks == "No network found")
+        )
+    roughnetworks.sort() # to ensure a consistent order for the networks in averaged data
+    print(roughnetworks)
     activities = []
-    #assert that length of parcels and #features in data are the same
     for network in roughnetworks:
         if network.lower().startswith(parcellation) or hcp:
-            netactivity = np.average(
-                data[:, (parcels == network)], axis=1
-            ).reshape((-1, 1))
+            netactivity = np.average(data[:, (parcels == network)], axis=1).reshape(
+                (-1, 1)
+            )
             activities.append(netactivity)
     return np.concatenate(activities, axis=1)
 
+
 def gsr(data):
+    """
+    Applies global signal regression to data
+
+    Args:
+        data: A numpy array of fMRI data; each row is a timepoint and each column is a ROI
+
+    Returns:
+        gsr_data: A numpy array of fMRI data with global signal regressed out
+    """
     gsignal = np.average(data, axis=1)
     gsignal = np.reshape(gsignal, (-1, 1))
     ginverse = np.linalg.inv(gsignal.T @ gsignal) @ gsignal.T
-    return data - ginverse @ data
+    beta = ginverse @ data
+    gsr_data = data - gsignal @ beta
+    return gsr_data
 
-def split_data(num_networks):
-    path = os.path.join(root,"results",f"data{num_networks}")
-    dest_path = os.path.join(root,"results",f"data{num_networks}_split")
-    if not os.path.exists(path):
-        os.mkdir(path)
-        import_raw(num_networks)
-    os.mkdir(dest_path)
-    for file_name in os.listdir(path):
-        data = np.loadtxt(os.path.join(path,file_name))
-        mask = np.loadtxt(os.path.join(root,"data","tmasks",file_name[:6]+".txt"))
-        curr = mask[0]
-        counter = 0
-        start = 0
-        for i in range(len(mask)):
-            if mask[i] - curr == 1:
-                start = i
-                curr = mask[i]
-            if mask[i] - curr == -1:
-                np.savetxt(os.path.join(dest_path,file_name[:-4]+f"_{counter}.txt"), data[start:i,:])
-                curr = mask[i]
-                counter += 1
-def get_transmats(data, latdim, ar=True, together = False):
 
-    emissions, probs = get_saved_params(data, latdim, ar)
-    hmm, params, props = init_transonly(emissions, probs, ar)
+def get_key():
+    """
+    Returns a random PRNG key in order to randomize model fitting and other stochastic Jax-based operations
 
-    if together:
-        params = fit_all_models(hmm, params, props, jnp.array(data), ar)
-        trans = params.transitions.transition_matrix
+    Returns: A PRNG key usable by Jax functions
+    """
+    return jr.PRNGKey(random.randint(0, 10000))
 
-    else:
-        trans = []
-        for item in data:
-            hmm, params, props = fit_all_models(hmm, params, props, item, ar)
-            trans.append(params.transitions.transition_matrix.reshape(-1))
 
-    return trans
+def get_params(data, latdim, ar=False, key_string="", lags=1):
+    """
+    Fits a chosen HMM to a dataset and saves the resulting HMM parameters, except the transition matrix, for later use
 
-def get_params_jax(data, latdim, ar, key_string="", lags=1):
+    Args:
+        data: a list of num_timepoints x num_networks numpy arrays
+        latdim: the number of hidden states in the model
+        ar: whether or not the model is autoregressive
+        key_string: "" if data are from MyConnectome, "hcp" if data are from HCP
+        lags: if the model is autoregressive, how many lags to include
 
+    Returns:
+        None
+    """
     obsdim = np.shape(data[0])[1]
 
     if ar:
-        path = os.path.join(root, "results", f"{key_string}arhmm{obsdim}")
+        key_string = key_string + "ar"
+
+    path = os.path.join(root, "results", f"{key_string}hmm{obsdim}")
+    if os.path.exists(os.path.join(path, f"emissions{latdim}")): # checking if parameters have already been saved
+        return None
+
+    if ar:
         hmm = LinearAutoregressiveHMM(latdim, obsdim, num_lags=lags)
         inputs = jnp.stack([hmm.compute_inputs(datum) for datum in data])
+
     else:
-        path = os.path.join(root,"results",f"{key_string}hmm{obsdim}")
         hmm = DiagonalGaussianHMM(latdim, obsdim)
 
     if not os.path.exists(path):
@@ -167,54 +214,104 @@ def get_params_jax(data, latdim, ar, key_string="", lags=1):
     params, props = hmm.initialize(key=get_key(), method="kmeans", emissions=np.array(data))
 
     if ar:
-        params, ll = hmm.fit_em(params, props, np.array(data), inputs=np.array(inputs), num_iters=1000)
+        params, ll = hmm.fit_em(params, props, np.array(data), inputs=np.array(inputs), num_iters=500)
     else:
-        params, ll = hmm.fit_em(params, props, np.array(data), num_iters=1000)
+        params, ll = hmm.fit_em(params, props, np.array(data), num_iters=500)
 
-    np.save(os.path.join(path,f"probs{latdim}"), params.initial.probs)
+    np.save(os.path.join(path, f"probs{latdim}"), params.initial.probs)
 
-    with open(os.path.join(path,f"emissions{latdim}"), 'wb') as file:
+    with open(os.path.join(path, f"emissions{latdim}"), "wb") as file:
         pickle.dump(params.emissions, file)
 
-    plt.plot(range(len(ll)),ll)
+    plt.plot(range(len(ll)), ll)
     plt.show()
 
-def get_saved_params(data, latdim, ar=True, key_string = ""):
-    obsdim = np.shape(data[0])[1]
+    return None
 
+
+def get_saved_params(obsdim, latdim, ar=False, key_string=""):
+    """
+    Retrieves previously saved fit parameters for a given HMM and dataset
+
+    Args:
+        obsdim: the emission dimension of the model
+        latdim: the number of hidden states in the model
+        ar: whether or not the model is autoregressive
+        key_string: "" if previously fit data are from MyConnectome, "hcp" if data are from HCP
+
+    Returns:
+        emissions: the fit emissions parameters
+        probs: the fit initial state probabilites
+    """
     if ar:
         path = os.path.join(root, "results", f"{key_string}arhmm{obsdim}")
     else:
         path = os.path.join(root, "results", f"{key_string}hmm{obsdim}")
 
-    if not os.path.exists(os.path.join(path, f"emissions{latdim}")):
-        print("getting parameters")
-        get_params_jax(data, latdim, ar, key_string=key_string)
+    assert os.path.exists(os.path.join(path, f"emissions{latdim}")), \
+        "You need to save the parameters first using the get_params method."
 
-    with open(os.path.join(path, f"emissions{latdim}"), 'rb') as file:
+    with open(os.path.join(path, f"emissions{latdim}"), "rb") as file:
         emissions = pickle.load(file)
     probs = np.load(os.path.join(path, f"probs{latdim}.npy"))
 
     return emissions, probs
+
+
 def fit_all_models(hmm, params, props, data, ar=False, num_iters=100):
+    """
+    Given an HMM, its parameters and properties, and a dataset, fits the model to that dataset
+
+    Args:
+        hmm: a dynamax HMM object
+        params: the parameters of the HMM
+        props: the properties of the HMM's parameters, which dictate which parameters should be trained
+        data: a list of num_timepoints x num_networks numpy arrays
+        ar: whether or not the model is autoregressive
+        num_iters: the number of EM iterations to carry out
+
+    Returns:
+        params: the fit parameters of the HMM
+    """
     if ar:
         inputs = jnp.stack([hmm.compute_inputs(datum) for datum in data])
-        params, _ = hmm.fit_em(params, props, data, inputs=inputs, num_iters=num_iters, verbose=False)
+        params, _ = hmm.fit_em(
+            params, props, data, inputs=inputs, num_iters=num_iters, verbose=False
+        )
 
     else:
         params, _ = hmm.fit_em(params, props, data, num_iters=num_iters, verbose=False)
 
     return params
 
-def init_transonly(emissions, probs, ar, num_lags=1):
 
+def init_transonly(emissions, probs, ar=False, lags=1):
+    """
+    Initializes and HMM for transition matrix-only fitting
+
+    Args:
+        emissions: the emissions parameters for the HMM
+        probs: the initial probabilities for the HMM
+        ar: whether or not the model is autoregresssive
+        lags: if the model is autoregressive, how many lags to include
+
+    Returns:
+        hmm: the appropriate dynamax HMM object with correct hidden states, emission dimension, ar status, etc.
+        params: the parameters of the HMM
+        props: the properties of the HMM's parameters, which dictate which parameters should be trained
+    """
     if ar:
         latdim = emissions.weights.shape[0]
         obsdim = emissions.weights.shape[1]
-        hmm = LinearAutoregressiveHMM(latdim, obsdim, num_lags=num_lags)
-        params, props = hmm.initialize(key=get_key(), method="prior", initial_probs=probs,
-                                       emission_weights=emissions.weights, emission_biases=emissions.biases,
-                                       emission_covariances=emissions.covs)
+        hmm = LinearAutoregressiveHMM(latdim, obsdim, num_lags=lags)
+        params, props = hmm.initialize(
+            key=get_key(),
+            method="prior",
+            initial_probs=probs,
+            emission_weights=emissions.weights,
+            emission_biases=emissions.biases,
+            emission_covariances=emissions.covs,
+        )
         props.emissions.weights.trainable = False
         props.emissions.biases.trainable = False
         props.emissions.covs.trainable = False
@@ -223,8 +320,13 @@ def init_transonly(emissions, probs, ar, num_lags=1):
         latdim = emissions.means.shape[0]
         obsdim = emissions.means.shape[1]
         hmm = DiagonalGaussianHMM(latdim, obsdim)
-        params, props = hmm.initialize(key=get_key(), method="prior", initial_probs=probs,
-                                       emission_means=emissions.means, emission_scale_diags=emissions.scale_diags)
+        params, props = hmm.initialize(
+            key=get_key(),
+            method="prior",
+            initial_probs=probs,
+            emission_means=emissions.means,
+            emission_scale_diags=emissions.scale_diags,
+        )
         props.emissions.means.trainable = False
         props.emissions.scale_diags.trainable = False
 
@@ -232,23 +334,50 @@ def init_transonly(emissions, probs, ar, num_lags=1):
 
     return hmm, params, props
 
-def logprob_all_models(hmm,params,data,ar):
+
+def logprob_all_models(hmm, params, data, ar=False):
+    """
+    Calculates the log likelihood of a particular run of data under a specified model
+
+    Args:
+        hmm: a dynamax HMM object
+        params: the parameters of the HMM
+        data: a num_timepoints x num_networks numpy array
+        ar: whether or not the model is autoregressive
+
+    Returns:
+        an int, the log likelihood of the data under the model
+    """
     if ar:
         inputs = hmm.compute_inputs(data)
         return hmm.marginal_log_prob(params, data, inputs=inputs)
     return hmm.marginal_log_prob(params, data)
 
-def loocv(data1, data2, latdim, trans=False, ar=False, lags=1, key_string=""):
 
+def loocv(data1, data2, latdim, trans=False, ar=False, lags=1):
+    """
+    Performs leave-one-out cross-validation by fitting a specified HMM to each dataset
+    and classifying test data based on log likelihood under those models
+    Args:
+        data1: list of num_timepoins x num_networks numpy arrays
+        data2: list of num_timepoins x num_networks numpy arrays
+        latdim: number of hidden states for the HMM
+        trans: whether to fit a transition matrix-only model
+        ar: whether to fit an autoregressive model
+        lags: if the model is autoregressive, how many lags to include
+
+    Returns:
+        The balanced accuracy of the classifier
+    """
     random.shuffle(data1)
     random.shuffle(data2)
     obsdim = np.shape(data1[0])[1]
-    assert np.shape(data2[0])[1] == obsdim, "Datasets must have the same number of features"
-    length = min(len(data1), len(data2)) - 1
+    length = min(len(data1), len(data2)) - 1 # need to train each model on the same amount of data,
+    # otherwise model trained with more data will have the log likelihood advantage
 
     if trans:
-        emissions, probs = get_saved_params(np.concatenate((data1, data2), axis=0), latdim, ar, key_string=key_string)
-        hmm, base_params1, props = init_transonly(emissions, probs, ar)
+        emissions, probs = get_saved_params(np.shape(data1[0])[1], latdim, ar=ar, key_string="")
+        hmm, base_params1, props = init_transonly(emissions, probs, ar=ar)
         base_params2 = base_params1
 
     else:
@@ -257,30 +386,55 @@ def loocv(data1, data2, latdim, trans=False, ar=False, lags=1, key_string=""):
         else:
             hmm = DiagonalGaussianHMM(latdim, obsdim)
 
-        base_params1, props = hmm.initialize(key=get_key(), method="kmeans", emissions=np.array(data1[:length]))
-        base_params2, _ = hmm.initialize(key=get_key(), method="kmeans", emissions=np.array(data2[:length]))
+        base_params2, props = hmm.initialize(key=get_key(), method="kmeans", emissions=np.array(data2[:length]))
 
     correct1 = 0
-    params2 = fit_all_models(hmm, base_params2, props, np.array(data2[:length]), ar)
+    params2 = fit_all_models(hmm, base_params2, props, np.array(data2[:length]), ar=ar)
     for i in range(len(data1)):
         temp = data1.copy()
         temp.pop(i)
         random.shuffle(temp)
-        params1 = fit_all_models(hmm, base_params1, props, np.array(temp[:length]), ar)
-        if logprob_all_models(hmm, params1, data1[i], ar) > logprob_all_models(hmm, params2, data1[i], ar):
+        if not trans:
+            base_params1, _ = hmm.initialize(key=get_key(), method="kmeans", emissions=np.array(temp[:length]))
+        params1 = fit_all_models(hmm, base_params1, props, np.array(temp[:length]), ar=ar)
+        if logprob_all_models(hmm, params1, data1[i], ar=ar) > logprob_all_models(hmm, params2, data1[i], ar=ar):
             correct1 += 1
+
+    if not trans:
+        base_params1, _ = hmm.initialize(key=get_key(), method="kmeans", emissions=np.array(data1[:length]))
+
     correct2 = 0
-    params1 = fit_all_models(hmm, base_params1, props, np.array(data1[:length]), ar)
+    params1 = fit_all_models(hmm, base_params1, props, np.array(data1[:length]), ar=ar)
     for i in range(len(data2)):
         temp = data2.copy()
         temp.pop(i)
         random.shuffle(temp)
-        params2 = fit_all_models(hmm, base_params2, props, np.array(temp[:length]), ar)
-        if logprob_all_models(hmm, params1, data2[i], ar) < logprob_all_models(hmm, params2, data2[i], ar):
+        if not trans:
+            base_params2, _ = hmm.initialize(key=get_key(), method="kmeans", emissions=np.array(temp[:length]))
+        params2 = fit_all_models(hmm, base_params2, props, np.array(temp[:length]), ar=ar)
+        if logprob_all_models(hmm, params1, data2[i], ar=ar) < logprob_all_models(hmm, params2, data2[i], ar=ar):
             correct2 += 1
-    print(np.average([correct1 / (correct1 + len(data2) - correct2), correct2 / (correct2 + len(data1) - correct1)]))
-    return np.average([correct1 / (correct1 + len(data2) - correct2), correct2 / (correct2 + len(data1) - correct1)])
-def loocv_batch(data1, data2, latdim, trans=False, ar=False, lags=1, key_string=""):
+
+    return np.average([correct1 / len(data1), correct2 / len(data2)])
+
+
+def loocv_batch(data1, data2, latdim, trans=False, ar=False, lags=1):
+    """
+    Performs leave-one-out cross-validation by fitting a specified HMM to each dataset
+    and classifying test data based on log likelihood under those models
+    in a batched manner that takes advanted of Jax parallelization
+
+    Args:
+        data1: list of num_timepoins x num_networks numpy arrays
+        data2: list of num_timepoins x num_networks numpy arrays
+        latdim: number of hidden states for the HMM
+        trans: whether to fit a transition matrix-only model
+        ar: whether to fit an autoregressive model
+        lags: if the model is autoregressive, how many lags to include
+
+    Returns:
+        The balanced accuracy of the classifier
+    """
     random.shuffle(data1)
     random.shuffle(data2)
     obsdim = np.shape(data1[0])[1]
@@ -288,11 +442,15 @@ def loocv_batch(data1, data2, latdim, trans=False, ar=False, lags=1, key_string=
 
     data1 = jnp.array(data1)
     data2 = jnp.array(data2)
-    data1_train = jnp.stack([jnp.concatenate([data1[:i], data1[i + 1:]]) for i in range(len(data1))])
-    data2_train = jnp.stack([jnp.concatenate([data2[:i], data2[i + 1:]]) for i in range(len(data2))])
+    data1_train = jnp.stack(
+        [jnp.concatenate([data1[:i], data1[i + 1:]]) for i in range(len(data1))]
+    )
+    data2_train = jnp.stack(
+        [jnp.concatenate([data2[:i], data2[i + 1:]]) for i in range(len(data2))]
+    )
 
     if trans:
-        emissions, probs = get_saved_params(np.concatenate((data1, data2), axis=0), latdim, ar, key_string=key_string)
+        emissions, probs = get_saved_params(np.shape(data1[0])[1], latdim, ar=ar, key_string="")
         hmm, params, props = init_transonly(emissions, probs, ar)
 
     else:
@@ -301,28 +459,58 @@ def loocv_batch(data1, data2, latdim, trans=False, ar=False, lags=1, key_string=
         else:
             hmm = DiagonalGaussianHMM(latdim, obsdim)
 
-        params, props = hmm.initialize(key=get_key(), method="kmeans", emissions=data1[:length, :, :])
+        params, props = hmm.initialize(
+            key=get_key(), method="kmeans", emissions=data1[:length, :, :]
+        )
 
-    params1 = fit_all_models(hmm, params, props, data1[:length, :, :], ar)
+    params1 = fit_all_models(hmm, params, props, data1[:length, :, :], ar=ar)
     if not trans:
-        params, _ = hmm.initialize(key=get_key(), method="kmeans", emissions=data2[:length, :, :])
-    params2 = fit_all_models(hmm, params, props, data2[:length,:,:], ar)
+        params, _ = hmm.initialize(
+            key=get_key(), method="kmeans", emissions=data2[:length, :, :]
+        )
+    params2 = fit_all_models(hmm, params, props, data2[:length, :, :], ar=ar)
+
     def _fit_fold(train, test, comp_params):
         para = params
         pr = props
         if not trans:
-            para, _ = kmeans_init(hmm, train[:length,:,:], get_key(), ar)
-        fit_params = fit_all_models(hmm, para, pr, train[:length,:,:], ar)
-        return (logprob_all_models(hmm, fit_params, test, ar) > logprob_all_models(hmm, comp_params, test, ar)).astype(int)
+            para, _ = kmeans_init(hmm, train[:length, :, :], get_key(), ar)
+        fit_params = fit_all_models(hmm, para, pr, train[:length, :, :], ar)
+        return (
+                logprob_all_models(hmm, fit_params, test, ar)
+                > logprob_all_models(hmm, comp_params, test, ar)
+        ).astype(int)
 
-    correct1 = jnp.sum(vmap(_fit_fold, in_axes=[0, 0, None])(data1_train, data1, params2))
-    correct2 = jnp.sum(vmap(_fit_fold, in_axes=[0, 0, None])(data2_train, data2, params1))
-    print(np.average([correct1 / (correct1 + len(data2) - correct2), correct2 / (correct2 + len(data1) - correct1)]))
-    return np.average([correct1 / (correct1 + len(data2) - correct2), correct2 / (correct2 + len(data1) - correct1)])
+    correct1 = jnp.sum(
+        vmap(_fit_fold, in_axes=[0, 0, None])(data1_train, data1, params2)
+    )
+    correct2 = jnp.sum(
+        vmap(_fit_fold, in_axes=[0, 0, None])(data2_train, data2, params1)
+    )
+
+    return np.average([correct1 / len(data1), correct2 / len(data2)])
+
+
 def svmcv(data1, data2):
+    """
+    Evaluates performance of a linear SVM on functional connectivity matrices using LOO cross-validation
 
-    zscored = zscore(np.concatenate((data1, data2)),axis=0)
-    data1 = zscored[:len(data1)].tolist()
+    Args:
+        data1: list of num_timepoins x num_networks numpy arrays
+        data2: list of num_timepoins x num_networks numpy arrays
+
+    Returns:
+        The balanced accuracy of the classifier
+    """
+    obsdim = np.shape(data1[0])[1]
+    fc_1 = []
+    fc_2 = []
+    for item in data1:
+        fc_1.append(np.corrcoef(item.T)[np.triu_indices(obsdim)])
+    for item in data2:
+        fc_2.append(np.corrcoef(item.T)[np.triu_indices(obsdim)])
+    zscored = zscore(np.concatenate((fc_1, fc_2)), axis=0)
+    data1 = zscored[: len(data1)].tolist()
     data2 = zscored[len(data1):].tolist()
 
     length = min(len(data1), len(data2)) - 1
@@ -354,46 +542,102 @@ def svmcv(data1, data2):
         if classifier.predict([data2[i]]) == 1:
             correct2 += 1
 
-    print(np.average([correct1/(correct1 + len(data2) - correct2), correct2/(correct2 + len(data1) - correct1)]))
-    return np.average([correct1/(correct1 + len(data2) - correct2), correct2/(correct2 + len(data1) - correct1)])
+    return np.average([correct1 / len(data1), correct2 / len(data2)])
 
-def permtest(data1, data2, class_func, latdim=6, reps=50):
+
+def get_transmats(data, latdim, together=False, ar=False, lags=1):
+    """
+    Fits a transition matrix-only HMM to a dataset and returns the fit transition matrix/matrices
+
+    Args:
+        data: a list of num_timepoints x num_networks numpy arrays
+        latdim: the number of hidden states in the model
+        together: whether or not to fit individual transition matrices for each run
+        ar: whether or not the model is autoregressive
+        lags: if the model is autoregressive, how many lags to include
+
+    Returns:
+        trans: either the fit transition matrix across all the data, or the list of fit transition matrices for each run
+    """
+    obsdim = np.shape(data[0])[1]
+    emissions, probs = get_saved_params(obsdim, latdim, ar=ar)
+    hmm, params, props = init_transonly(emissions, probs, ar=ar)
+
+    if together:
+        params = fit_all_models(hmm, params, props, jnp.array(data), ar=ar)
+        trans = params.transitions.transition_matrix
+
+    else:
+        trans = []
+        for item in data:
+            item_rs = np.reshape(item, [1, np.shape(item)[0], np.shape(item)[1]])
+            params = fit_all_models(hmm, params, props, jnp.array(item_rs), ar=ar)
+            trans.append(params.transitions.transition_matrix)
+
+    return trans
+
+
+def permtest(data1, data2, class_func, reps=50, latdim=6, trans=False, ar=False):
+    """
+    Performs a permutation test to evaluate the significance of a classifier's performance and plots the results
+
+    Args:
+        data1: list of num_timepoins x num_networks numpy arrays
+        data2: list of num_timepoins x num_networks numpy arrays
+        class_func: the classification function to be used
+        reps: the number of permutations to perform
+        latdim: if using an HMM-based classifier, the number of hidden states
+        trans: whether to fit a transition matrix-only model
+        ar: whether to fit an autoregressive model
+
+    Returns:
+        The average classification accuracy across permutations
+    """
     length = math.floor(np.average([len(data1), len(data2)]))
     if class_func == svmcv:
-        realacc = svmcv(data1,data2)
+        realacc = svmcv(data1, data2)
     else:
-        realacc = class_func(data1, data2, latdim)
+        realacc = class_func(data1, data2, latdim, trans=trans, ar=ar)
     permaccs = []
 
     for i in range(reps):
+        print(i)
         alldatas = data1 + data2
         random.shuffle(alldatas)
         data1 = alldatas[:length]
-        data2 = alldatas[length:2*length]
+        data2 = alldatas[length: 2 * length]
         if class_func == svmcv:
             acc = svmcv(data1, data2)
         else:
-            acc = class_func(data1, data2, latdim)
+            acc = class_func(data1, data2, latdim, trans=trans, ar=ar)
 
         permaccs.append(acc)
 
-    plt.hist(permaccs,bins=50)
-    plt.axvline(x=realacc)
+    plt.hist(permaccs, bins=50)
+    plt.axvline(x=realacc, color="red")
     plt.show()
     return np.average(permaccs)
 
-def getstats(model, params, datas, num_states, ar):
-    '''
-    takes a model and a dataset, returns avg occupancy time in each state across run, avg consecutive dwell time in each
-    state and avg # of transitions in a run
 
+def get_stats(hmm, params, datas, ar):
+    """
+    Given a model and data, returns a variety of statistics for the most likely hidden states underlying the data
+    given that model
     Args:
-        model: hidden markov model trained to the data
-        datas: data from which to extract statistics
+        hmm: the hidden markov model
+        params: parameters of the model
+        datas: list of num_timepoins x num_networks numpy arrays for which to find the hidden states
+        ar: whether or not the model is autoregressive
 
     Returns:
-
-    '''
+        avgoccs: list of the average occupancy in each hidden state across all the data in datas
+        stdoccs: list of standard deviations of the occupancies for each hidden state
+        avgdwells: list of the average dwell time in each hidden state across all the data in datas
+        stddwells: list of standard deviations of the dwell times for each hidden state
+        avgchanges: the average number of hidden state transitions per run over all data in datas
+        stdchanges: the standard deviation of the number of hidden state transitions per run
+    """
+    num_states = np.shape(params.transitions.transition_matrix)[0]
     changes = []
     occs = []
     dwells = [[]]
@@ -404,8 +648,8 @@ def getstats(model, params, datas, num_states, ar):
     for rep in np.arange(reps):
         for data in datas:
             if ar:
-                input = model.compute_inputs(data)
-            state = model.most_likely_states(params,data,inputs = input)
+                input = hmm.compute_inputs(data)
+            state = hmm.most_likely_states(params, data, inputs=input)
             change = np.nonzero(np.diff(state))
             change = change[0]
             num_change = len(change)
@@ -414,468 +658,235 @@ def getstats(model, params, datas, num_states, ar):
             occs.append(occ)
             for i in range(num_change):
                 if i == 0:
-                    dwells[state[change[0]]].append(change[0])
+                    dwells[state[change[i]]].append(change[0]+1)
                 else:
                     dwells[state[change[i]]].append(change[i] - change[i - 1])
-        avgchanges = np.mean(changes)
-        stdchanges = np.std(changes)
-        avgoccs = np.mean(occs, axis=0)
-        stdoccs = np.std(occs, axis=0)
-        avgdwells = []
-        stddwells = []
-        for item in dwells:
-            avgdwells.append(np.mean(item))
-            stddwells.append(np.std(item))
-        return occs#avgoccs, avgdwells, avgchanges, stdoccs, stddwells, stdchanges
+            dwells[state[-1]].append(len(state) - change[-1] - 1)
 
-def get_key():
-    return jr.PRNGKey(random.randint(0,10000))
-def plot_hmm_ll(data, maxstates, folds):
-    test_ll = np.zeros(maxstates-1)
-    print(len(test_ll))
-    obsdim = np.shape(data[0])[1]
-    hiddenstates = np.arange(2, maxstates + 1)
-    print(len(hiddenstates))
-    kf = KFold(n_splits=folds)
-    for train, test in kf.split(data):
-        for num_states in hiddenstates:
-            print(num_states)
-            #hmm = DiagonalGaussianHMM(num_states, obsdim)
-            hmm = LinearAutoregressiveHMM(num_states, obsdim, num_lags=1)
-            params, props = hmm.initialize(key=get_key(), method="kmeans", emissions=np.array(data)[train])
-            inputs = []
-            for index in train:
-                inputs.append(hmm.compute_inputs(np.array(data)[index]))
-            params, _ = hmm.fit_em(params, props, np.array(data)[train], inputs=np.array(inputs), num_iters=100, verbose=False)
-            for index in test:
-                inputs = hmm.compute_inputs(np.array(data)[index])
-                test_ll[num_states - 2] += hmm.marginal_log_prob(params, np.array(data)[index], inputs=inputs)
-    plt.plot(hiddenstates, test_ll)
+        return occs, dwells, changes
+
+
+def build_dataframe(directory):
+    """
+    NOT VERIFIED! UPDATE AND CHECK BASED ON NAMING SCHEME I END UP USING
+    Builds a dataframe from a directory of classification accuracy files
+
+    Args:
+        directory: the directory containing the classification accuracy files
+
+    Returns:
+        df: a pandas dataframe containing the classification accuracy data
+    """
+    df = pd.DataFrame()
+    for filename in os.listdir(directory):
+        data = np.loadtxt(os.path.join(directory, filename))
+        hidden_states = int(filename.split("_")[-1])
+        approach = filename.split("_")[-2]
+        model = filename.split("_")[0]
+
+        for acc in data:
+            df = df.append(
+                {
+                    "Classification Accuracy": acc,
+                    "Approach": approach,
+                    "Hidden States": hidden_states,
+                    "Model": model
+                },
+                ignore_index=True,
+            )
+    return df
+
+
+def plot_occs(occ1, occ2):
+    """
+    Make a bar plot comparing the occupancies from two datasets
+
+    Args:
+        occ1: a list of arrays, each of which is occupancies from one run of uncaffeinated data
+        occ2: a list of arrays, each of which is occupancies from one run of caffeinated data
+
+    Returns:
+        dataframe: a dataframe that can be reused to plot occupancy data
+    """
+    states = []
+    data = []
+    occs = []
+    for item in occ1:
+        for i in range(0, len(item)):
+            occs.append(item[i]/sum(item))
+            states.append(i)
+            data.append("Uncaffeinated")
+    for item in occ2:
+        for i in range(0, len(item)):
+            occs.append(item[i]/sum(item))
+            states.append(i)
+            data.append("Caffeinated")
+    dict = {"Occupancies": occs, "Hidden States": states, "Dataset": data}
+    dataframe = pd.DataFrame(dict)
+
+    sns.set_theme()
+    colors = [
+        [51 / 255, 34 / 255, 136 / 255],
+        [136 / 255, 204 / 255, 238 / 255],
+        [17 / 255, 119 / 255, 51 / 255],
+        [153 / 255, 153 / 255, 51 / 255],
+        [204 / 255, 102 / 255, 119 / 255],
+        [136 / 255, 34 / 255, 85 / 255],
+    ]
+    sns.set_palette(sns.color_palette(colors))
+    sns.barplot(data=dataframe, x="Hidden States", y="Occupancies", hue="Dataset", errorbar="ci")
     plt.show()
 
-def plot_avg_lls():
-    path = os.path.join(root,"results","fits")
-    full7 = [np.loadtxt(os.path.join(path,"7diagfull.txt"))[:11]]
-    trans7 = [np.loadtxt(os.path.join(path,"7diagtrans.txt"))[:11]]
-    full17 = [np.loadtxt(os.path.join(path,"17diagfull.txt"))[:11]]
-    trans17 = [np.loadtxt(os.path.join(path,"17diagtrans.txt"))[:11]]
-    for file_name in os.listdir(path):
-        if file_name.startswith("7full"):
-            full7.append(np.loadtxt(os.path.join(path,file_name)))
-        elif file_name.startswith("7trans"):
-            trans7.append(np.loadtxt(os.path.join(path,file_name)))
-        elif file_name.startswith("17full"):
-            full17.append(np.loadtxt(os.path.join(path,file_name)))
-        elif file_name.startswith("17trans"):
-            trans17.append(np.loadtxt(os.path.join(path,file_name)))
-    base7 = np.loadtxt(os.path.join(path,"7baseline.txt"))
-    base17 = np.loadtxt(os.path.join(path,"17baseline.txt"))
-    #plt.errorbar(np.arange(2,13),np.mean(full7,axis=0),yerr=np.std(full7,axis=0),label="full")
-    plt.errorbar(np.arange(2,13),np.mean(full17,axis=0),yerr=np.std(full7,axis=0),label="full")
-    #plt.errorbar(np.arange(2, 13), np.mean(trans7, axis=0),yerr=np.std(full7,axis=0), label="trans only")
-    plt.errorbar(np.arange(2, 13), np.mean(trans17, axis=0),yerr=np.std(full7,axis=0), label="trans only")
-    #plt.errorbar(np.arange(2, 13), np.ones(11)*np.mean(base7), yerr=np.ones(11)*np.std(base7), label="baseline")
-    plt.errorbar(np.arange(2, 13), np.ones(11) * np.mean(base17), yerr=np.ones(11) * np.std(base17),label="baseline")
-    plt.legend()
-    plt.xlabel("hidden states")
-    plt.ylabel("classification accuracy")
-    plt.title("17 networks")
-    plt.show()
+    return dataframe
 
-def plot_trans_matrix(mat1,mat2):
+def plot_trans_matrix(mat1, mat2):
+    """
+    Plots two transition matrices, as well as the element-wise magnitude of their difference
+    Args:
+        mat1: a numstates x numstates numpy array
+        mat2: a numstates x numstates numpy array
+
+    Returns:
+        None
+    """
     mat1 = np.array(mat1)
     mat2 = np.array(mat2)
-    np.fill_diagonal(mat1,0)
-    np.fill_diagonal(mat2,0)
+    np.fill_diagonal(mat1, 0)
+    np.fill_diagonal(mat2, 0)
     sns.set(font_scale=0.75)
     fig, ax = plt.subplots(ncols=3)
     plt.subplots_adjust(right=0.85)
-    cbar_ax = fig.add_axes([.88, .345, .03, .3])
-    sns.heatmap(mat1, cbar_ax=cbar_ax, ax=ax[0], vmin=0, vmax=0.1, square=True, cmap="viridis")
-    sns.heatmap(mat2, cbar_ax=cbar_ax, ax=ax[1], vmin=0, vmax=0.1, square=True, cmap="viridis")
-    sns.heatmap(np.abs(mat2 - mat1), cbar_ax = cbar_ax, vmin=0, vmax=0.1,ax=ax[2], square=True, cmap="viridis")
+    cbar_ax = fig.add_axes([0.88, 0.345, 0.03, 0.3])
+    sns.heatmap(
+        mat1, cbar_ax=cbar_ax, ax=ax[0], vmin=0, vmax=0.1, square=True, cmap="viridis"
+    )
+    sns.heatmap(
+        mat2, cbar_ax=cbar_ax, ax=ax[1], vmin=0, vmax=0.1, square=True, cmap="viridis"
+    )
+    sns.heatmap(
+        np.abs(mat2 - mat1),
+        cbar_ax=cbar_ax,
+        vmin=0,
+        vmax=0.1,
+        ax=ax[2],
+        square=True,
+        cmap="viridis",
+    )
     ax[0].set_title("Uncaffeinated \nRuns", fontsize=10)
     ax[1].set_title("Caffeinated \nRuns", fontsize=10)
-    ax[2].set_title("Absolute \nDifference",fontsize=10)
-    plt.savefig("./results/figs/OHBM trans matrices TRANSPARENT", facecolor=(1, 1, 1, 0))
+    ax[2].set_title("Absolute \nDifference", fontsize=10)
+    plt.savefig(
+        "./results/figs/OHBM trans matrices TRANSPARENT", facecolor=(1, 1, 1, 0)
+    )
     plt.show()
 
-def plot_emission_networks(mus1):#, mus2):
-    num_states = np.shape(mus1)[0]
-    obsdim = np.shape(mus1)[1]
+    return None
+
+def plot_class_acc(dataframe):
+    """
+    Plots classification accuracy for different models and numbers of hidden states
+
+    Args:
+        dataframe: a dataframe with columns "Classification Accuracy", "Model", "Hidden States", and "Networks"
+
+    Returns:
+        None
+    """
+    sns.set_theme()
+    colors = [
+        [51 / 255, 34 / 255, 136 / 255],
+        [136 / 255, 204 / 255, 238 / 255],
+        [17 / 255, 119 / 255, 51 / 255],
+        [153 / 255, 153 / 255, 51 / 255],
+        [204 / 255, 102 / 255, 119 / 255],
+        [136 / 255, 34 / 255, 85 / 255],
+    ]
+    sns.set_palette(sns.color_palette(colors))
+    fig = sns.relplot(
+        data=dataframe,
+        x="Hidden States",
+        y="Classification Accuracy",
+        hue="Approach",
+        col="Model",
+        kind="line",
+        errorbar="ci"
+    )#.set_titles("7 Networks", weight="bold", size=14)
+    sns.move_legend(fig, "upper right", bbox_to_anchor=(0.817, 0.93))
+    fig.legend.set_title(None)
+    fig.legend.set(frame_on=True)
+
+    fig.fig.subplots_adjust(top=0.9)
+    plt.ylim([0, 1])
+    #plt.title("17 Networks", weight="bold", fontsize=14)
+
+    fig.tight_layout()
+    plt.show()
+
+    return None
+
+def plot_emission_networks(mus):
+    num_states = np.shape(mus)[0]
+    obsdim = np.shape(mus)[1]
     fig, axs = plt.subplots(1, num_states, subplot_kw=dict(projection="polar"))
     theta = np.arange(obsdim) / obsdim * 2 * math.pi
     i = 0
     while i < num_states:
-        axs[i].set_ylim([-1.5, 1.5])
-        axs[i].plot(theta, mus1[i, :])
+        axs[i].set_ylim([-0.5, 0.5])
+        axs[i].plot(theta, mus[i, :])
         axs[i].set_xticklabels([])
         axs[i].set_yticklabels([])
-        for t, r in zip(theta, mus1[i, :]):
-            axs[i].annotate(str(round(t * 17 / (2 * math.pi) + 1)), xy=[t, r])
-        #axs[1, i].set_ylim([-1.5, 1.5])
-        #axs[1, i].plot(theta, mus2[i, :])
-        #axs[1, i].set_xticklabels([])
-        #axs[1, i].set_yticklabels([])
-        #for t, r in zip(theta, mus2[0][i, :]):
-        #    axs[1, i].annotate(str(round(t * 17 / (2 * math.pi) + 1)), xy=[t, r])
+        for t, r in zip(theta, mus[i, :]):
+            axs[i].annotate(str(round(t * 7 / (2 * math.pi) + 1)), xy=[t, r])
         i += 1
-    networkstring = (
-        "1 - VisCent\n "
-        "2 - VisPeri\n"
-        "3 - SomMotA\n"
-        "4 - SomMotB\n"
-        "5 - DorsAttnA\n"
-        "6 - DorsAttnB\n"
-        "7 - SalVentAttnA\n"
-        "8 - SalVentAttnB\n"
-        "9 - LimbicB\n"
-        "10 - LimbicA\n"
-        "11 - ContA\n"
-        "12 - ContB\n"
-        "13 - ContC\n"
-        "14 - DefaultA\n"
-        "15 - DefaultB\n"
-        "16 - DefaultC\n"
-        "17 - TempPar"
-    )
+    if obsdim == 7:
+        networkstring = (
+            "1 - Visual\n"
+            "2 - Somatomotor\n"
+            "3 - Dorsal Attention\n"
+            "4 - Salience / Ventral Attention\n"
+            "5 - Limbic\n"
+            "6 - Control\n"
+            "7 - Default\n"
+        )
+    else:
+        networkstring = (
+            "check"
+        )
     plt.text(-100, 0, networkstring, fontsize=10)
     plt.show()
+
 def main():
-
-
+    filename = os.path.join(root, "results", "fits", "MyConnectome", "baseline_17")
     tues, thurs = import_tuesthurs(17)
-    print(loocv(tues, thurs, 6, trans=False, ar=True))
-
-    quit()
-
-
-    with open(os.path.join(root, "results", "fits", "hmm7_split", "allgaussiandata"), "rb") as file:
-        data = pickle.load(file)
-
-    sns.set_theme()
-    colors = [[51 / 255, 34 / 255, 136 / 255], [136 / 255, 204 / 255, 238 / 255], [17 / 255, 119 / 255, 51 / 255],
-              [153 / 255, 153 / 255, 51 / 255], [204 / 255, 102 / 255, 119 / 255], [136 / 255, 34 / 255, 85 / 255]]
-    sns.set_palette(sns.color_palette(colors))
-    fig = sns.relplot(data=data, x="Hidden States", y="Classification Accuracy", hue="Head Motion", kind="line",
-                      errorbar="ci")
-    sns.move_legend(fig, "upper right", bbox_to_anchor=(0.717, 0.73))
-    fig.legend.set_title(None)
-    fig.legend.set(frame_on=True)
-
-    fig.fig.subplots_adjust(top=.9)
-    plt.ylim([0.4, 1])
-    plt.xticks([2, 3, 4, 5, 6, 7, 8, 9, 10], [2, 3, 4, 5, 6, 7, 8, 9, 10])
-    plt.title("Classification accuracy on MyConnectome data,\ncensored vs. uncensored head motion", weight='bold',
-              fontsize=14)
-
-    fig.tight_layout()
-    plt.savefig("./results/figs/head_motion_test", facecolor=(1, 1, 1, 0))
-    plt.show()
-    quit()
-
-
-    acc = []
-    model = []
-    states = []
-    path = os.path.join(root, "results", "fits", "psychosis")
-    for filename in os.listdir(path):
-        data = np.loadtxt(os.path.join(path, filename))
-        if filename[:1] == "b":
-            for r in range(2,11):
-                acc.extend(data)
-                model.extend(["Static Baseline"]*len(data))
-                states.extend([r]*len(data))
-        elif int(filename[9:]) < 11:
-            model.extend(["Dynamic Classifier"]*len(data))
-            states.extend([int(filename[9:])]*len(data))
-            acc.extend(data)
-
-    data = pd.DataFrame({"Classification Accuracy": acc, "Model": model, "Hidden States": states})
-    with open(os.path.join(path, "alldata"), "wb") as file:
-        pickle.dump(data, file)
-
-
-
-    hm_fc = {}
-    hm_fc["t"] = []
-    hm_fc["r"] = []
-    nohm_fc = {}
-    nohm_fc["t"] = []
-    nohm_fc["r"] = []
-
-    path1 = os.path.join(root,'results','data7_split')
-    path2 = os.path.join(root,'results','data7')
-    thresh = 100
-
-    for filename in os.listdir(path2):
-        if filename[6] != "t" and filename[6] != "r":
-            continue
-
-        data = np.loadtxt(os.path.join(path2,filename))
-        num = 0
-        hm_pos = 0
-        while os.path.exists(os.path.join(path1, filename[:7] + f"_{num}.txt")):
-            data1 = np.loadtxt(os.path.join(path1, filename[:7] + f"_{num}.txt"))
-            counter = 1
-            while counter <= len(data1) / thresh:
-                hm_pos += 1
-                nohmdata = data1[(counter - 1) * thresh:(counter) * thresh]
-                hmdata = data[(hm_pos - 1) * thresh:(hm_pos) * thresh]
-                nohm_fc[filename[6]].append(np.corrcoef(nohmdata.T)[np.triu_indices(7)])
-                hm_fc[filename[6]].append(np.corrcoef(hmdata.T)[np.triu_indices(7)])
-                counter += 1
-            num += 1
-
-    bl_motion = []
-    bl_nomotion = []
-    reps = 10
+    reps = 100
     for rep in range(reps):
-        bl_motion.append(svmcv(hm_fc["t"], hm_fc["r"]))
-        bl_nomotion.append(svmcv(nohm_fc["t"], nohm_fc["r"]))
-        print(bl_motion[-1])
-        print(bl_nomotion[-1])
-    np.savetxt(os.path.join(root, "results", "fits", "hmm7_split", "bl_motion"), bl_motion)
-    np.savetxt(os.path.join(root, "results", "fits", "hmm7_split", "bl_nomotion"), bl_nomotion)
-    quit()
+        acc = [svmcv(tues, thurs)]
+        with open(filename,"ab") as file:
+            np.savetxt(file, acc)
 
-
-
-
-
-    tues, thurs = import_tuesthurs(17)
-    all_data = tues.copy()
-    all_data.extend(thurs)
-
-    emissions, probs = get_saved_params(tues, 4, True)
-    hmm, params, props = init_transonly(emissions, probs, True)
-    params = fit_all_models(hmm, params, props, np.array(all_data), True)
-
-    sns.set_theme()
-    colors = [[51 / 255, 34 / 255, 136 / 255], [136 / 255, 204 / 255, 238 / 255], [17 / 255, 119 / 255, 51 / 255],
-              [153 / 255, 153 / 255, 51 / 255], [204 / 255, 102 / 255, 119 / 255], [136 / 255, 34 / 255, 85 / 255]]
-    sns.set_palette(sns.color_palette(colors))
-
-
-    tuesoccs = np.array(getstats(hmm,params,tues,4, True))/518
-    thursoccs = getstats(hmm,params,thurs,4, True)
-    tuesoccs = tuesoccs.reshape(-1,1)
-    tuesstates = np.array([[0,1,2,3]*30]).T
-    thursoccs = np.array(getstats(hmm,params,thurs,4, True))/518
-    thursoccs = thursoccs.reshape(-1,1)
-    alloccs = np.concatenate((tuesoccs,thursoccs),axis=0)
-    thursstates = np.array([[0,1,2,3]*23]).T
-    allstates = np.concatenate((tuesstates,thursstates),axis=0)
-    labels = ["Uncaffeinated"]*120
-    labels.extend(["Caffeinated"]*92)
-    occsdict = {}
-    occsdict["Occupancy"] = alloccs.flatten()
-    occsdict["State"] = allstates.flatten()
-    occsdict["Label"] = labels
-    print(len(occsdict["Occupancy"]))
-    print(len(occsdict["State"]))
-    print(len(occsdict["Label"]))
-    occsdf = pd.DataFrame(data=occsdict)
-    ax = sns.barplot(occsdf,x="State",y="Occupancy",hue="Label",estimator="mean",errorbar="ci")
-    #fig.legend.set_title(None)
-    ax.legend(title=None)
-    plt.savefig("./results/figs/OHBM occupancies TRANSPARENT", facecolor=(1, 1, 1, 0))
-    plt.show()
-
-    #print(t)
-    quit()
-
-
-
-
-    path = os.path.join(root, "results", "fits")
-    with open(os.path.join(path, "dataframeall"), "rb") as file:
-        data = pickle.load(file)
-
-    sns.set_theme()
-    colors = [[51 / 255, 34 / 255, 136 / 255], [136 / 255, 204 / 255, 238 / 255], [17 / 255, 119 / 255, 51 / 255],
-              [153 / 255, 153 / 255, 51 / 255], [204 / 255, 102 / 255, 119 / 255], [136 / 255, 34 / 255, 85 / 255]]
-    sns.set_palette(sns.color_palette(colors))
-    fig = sns.relplot(data=data, x="Hidden States", y="Classification Accuracy", hue="Model", col="Networks", kind="line",
-                      errorbar="ci").set_titles('7 Networks', weight='bold', size=14)
-    sns.move_legend(fig,"upper right",bbox_to_anchor=(0.817, 0.93))
-    fig.legend.set_title(None)
-    fig.legend.set(frame_on=True)
-
-    fig.fig.subplots_adjust(top=.9)
-    plt.ylim([0.6, 1])
-    plt.title("17 Networks", weight='bold', fontsize=14)
-
-    fig.tight_layout()
-    plt.savefig("./results/figs/OHBM HCP All TRANSPARENT", facecolor=(1, 1, 1, 0))
-    plt.show()
-    quit()
-
-    acc = []
-    state = []
-    mod = []
-    network = []
-
-    networks = [7,17]
-
-    for net in networks:
-        for file_name in os.listdir(os.path.join(path, f'hmm{net}')):
-            acc.extend(np.loadtxt(os.path.join(path, f'hmm{net}', file_name))[:100])
-            state.extend([int(file_name[3:])] * 100)
-            mod.extend(["Full, HMM"] * 100)
-            network.extend([f"{net} Networks"]*100)
-        for file_name in os.listdir(os.path.join(path, f'trans{net}')):
-            acc.extend(np.loadtxt(os.path.join(path, f'trans{net}', file_name))[:100])
-            state.extend([int(file_name[3:])] * 100)
-            mod.extend(["Trans Only, HMM"] * 100)
-            network.extend([f"{net} Networks"] * 100)
-        for file_name in os.listdir(os.path.join(path, f'arhmm{net}')):
-            acc.extend(np.loadtxt(os.path.join(path, f'arhmm{net}', file_name))[:100])
-            state.extend([int(file_name[3:])] * 100)
-            mod.extend(["Full, ARHMM"] * 100)
-            network.extend([f"{net} Networks"] * 100)
-        for file_name in os.listdir(os.path.join(path, f'artrans{net}')):
-            acc.extend(np.loadtxt(os.path.join(path, f'artrans{net}', file_name))[:100])
-            state.extend([int(file_name[3:])] * 100)
-            mod.extend(["Trans Only, ARHMM"] * 100)
-            network.extend([f"{net} Networks"] * 100)
-        baseline = np.loadtxt(os.path.join(path, f'baseline{net}.txt'))
-        for hs in np.arange(2, 13):
-            acc.extend(baseline)
-            state.extend([hs] * len(baseline))
-            mod.extend(["Baseline"] * len(baseline))
-            network.extend([f"{net} Networks"] * 100)
-
-    datadict = {}
-    datadict["Classification Accuracy"] = acc
-    datadict["Hidden States"] = state
-    datadict["Model"] = mod
-    datadict["Networks"] = network
-    data = pd.DataFrame(data=datadict)
-    with open(os.path.join(path, "dataframeall"), "wb") as file:
-        pickle.dump(data, file)
 
     quit()
 
 
-
-
-
-
-    path = os.path.join(root, "results", "fits")
-
-    path = os.path.join(root, "results", "fits")
-
-    with open(os.path.join(path, "dataframe7"), "rb") as file:
-        data = pickle.load(file)
-
-    sns.relplot(data=data, x="Hidden States", y="Classification Accuracy", hue="Model", kind="line", errorbar="sd")
-    plt.ylim([0.5, 1])
-    plt.show()
+    df = build_dataframe(os.path.join(root, "results", "fits", "testing_hcp"))
+    plot_class_acc(df)
     quit()
-
-    with open(os.path.join(path, "dataframe17"), "rb") as file:
-        data = pickle.load(file)
-
-    sns.relplot(data=data, x="Hidden States", y="Classification Accuracy", hue="Model", kind="line", errorbar="sd")
-    plt.ylim([0.5,1])
-    plt.show()
+    emissions, _ = get_saved_params(7, 5, ar=True, key_string="")
+    plot_emission_networks(emissions.biases)#np.average(emissions.weights,axis=2))
     quit()
-
-
-    acc = []
-    state = []
-    mod = []
-
-    for file_name in os.listdir(os.path.join(path,'hmm17')):
-        acc.extend(np.loadtxt(os.path.join(path,'hmm17',file_name))[:100])
-        state.extend([int(file_name[3:])]*100)
-        mod.extend(["Full, HMM"]*100)
-    for file_name in os.listdir(os.path.join(path,'arhmm17')):
-        acc.extend(np.loadtxt(os.path.join(path,'arhmm17',file_name))[:100])
-        state.extend([int(file_name[3:])]*100)
-        mod.extend(["Full, ARHMM"]*100)
-    for file_name in os.listdir(os.path.join(path,'trans17')):
-        acc.extend(np.loadtxt(os.path.join(path,'trans17',file_name))[:100])
-        state.extend([int(file_name[3:])]*100)
-        mod.extend(["Trans Only, HMM"]*100)
-    for file_name in os.listdir(os.path.join(path,'artrans17')):
-        acc.extend(np.loadtxt(os.path.join(path,'artrans17',file_name))[:100])
-        state.extend([int(file_name[3:])]*100)
-        mod.extend(["Trans Only, ARHMM"]*100)
-    baseline = np.loadtxt(os.path.join(path,'baseline17.txt'))
-    for hs in np.arange(2,13):
-        acc.extend(baseline)
-        state.extend([hs]*len(baseline))
-        mod.extend(["Baseline"]*len(baseline))
-
-    datadict = {}
-    datadict["Classification Accuracy"] = acc
-    datadict["Hidden States"] = state
-    datadict["Model"] = mod
-    data7 = pd.DataFrame(data=datadict)
-    with open(os.path.join(path,"dataframe17"),"wb") as file:
-        pickle.dump(data7,file)
-
-    batch_results = []
-    full_results = []
-
     tues, thurs = import_tuesthurs(7)
-
-    reps = 10
-
-    for i in range(reps):
-        batch_results.append(loocv_batch(tues, thurs, 4, trans=True, ar=True))
-        full_results.append(loocv(tues, thurs, 4, trans=True, ar=True))
-
-    print(batch_results)
-    print(full_results)
-    plt.scatter(np.zeros(reps),batch_results,label="jax runs")
-    plt.scatter(np.ones(reps),full_results,label="full runs")
-    plt.legend()
-    plt.show()
+    emissions, probs = get_saved_params(7, 9, ar=True, key_string="")
+    hmm, params, props = init_transonly(emissions, probs, ar=True)
+    params = fit_all_models(hmm, params, props, jnp.array(tues + thurs), ar=True)
+    tuesoccs, _, _ = get_stats(hmm, params, tues, ar=True)
+    thursoccs, _, _ = get_stats(hmm, params, thurs, ar=True)
+    plot_occs(tuesoccs, thursoccs)
     quit()
 
+    dir = os.path.join(root, "results", "fits", "MyConnectome")
+    dataframe = build_dataframe(dir)
+    plot_class_acc(dataframe)
 
-    iterations = np.arange(6,9)
-    tues7, thurs7 = import_tuesthurs(7)
-    tues17, thurs17 = import_tuesthurs(17)
-    states = np.arange(2, 13)
-    for iter in iterations:
-        print(f'Iteration {iter}')
-        full7 = []
-        full17 = []
-        trans7 = []
-        trans17 = []
-        for state in states:
-            print(f'State {state}')
-            full7.append(loocv(tues7,thurs7,state))
-            full17.append(loocv(tues17,thurs17,state))
-            trans7.append(loocvtrans(tues7,thurs7,state))
-            trans17.append(loocvtrans(tues17,thurs17,state))
-        np.savetxt(f'7full{iter}.txt', full7)
-        np.savetxt(f'17full{iter}.txt', full17)
-        np.savetxt(f'7trans{iter}.txt', trans7)
-        np.savetxt(f'17trans{iter}.txt', trans17)
-
-
-
-    tues, thurs = import_tuesthurs(17)
-    tues_fc = []
-    thurs_fc = []
-    for item in tues:
-        tues_fc.append(np.corrcoef(item.T)[np.triu_indices(17)])
-    for item in thurs:
-        thurs_fc.append(np.corrcoef(item.T)[np.triu_indices(17)])
-
-    acc = []
-    for i in range(10):
-        acc.append(svmcv(tues_fc,thurs_fc))
-    np.savetxt("17baseline.txt",acc)
-    print(acc)
 
 if __name__ == "__main__":
     main()
-
-
-
