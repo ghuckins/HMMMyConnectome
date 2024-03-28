@@ -630,12 +630,9 @@ def get_stats(hmm, params, datas, ar):
         ar: whether or not the model is autoregressive
 
     Returns:
-        avgoccs: list of the average occupancy in each hidden state across all the data in datas
-        stdoccs: list of standard deviations of the occupancies for each hidden state
-        avgdwells: list of the average dwell time in each hidden state across all the data in datas
-        stddwells: list of standard deviations of the dwell times for each hidden state
-        avgchanges: the average number of hidden state transitions per run over all data in datas
-        stdchanges: the standard deviation of the number of hidden state transitions per run
+        occs: list of the occupancies in each hidden state across all the data in datas
+        dwells: list of the dwell times in each hidden state across all the data in datas
+        changes: the number of hidden state transitions per run over all data in datas
     """
     num_states = np.shape(params.transitions.transition_matrix)[0]
     changes = []
@@ -668,7 +665,6 @@ def get_stats(hmm, params, datas, ar):
 
 def build_dataframe(directory):
     """
-    NOT VERIFIED! UPDATE AND CHECK BASED ON NAMING SCHEME I END UP USING
     Builds a dataframe from a directory of classification accuracy files
 
     Args:
@@ -680,21 +676,84 @@ def build_dataframe(directory):
     df = pd.DataFrame()
     for filename in os.listdir(directory):
         data = np.loadtxt(os.path.join(directory, filename))
-        hidden_states = int(filename.split("_")[-1])
-        approach = filename.split("_")[-2]
-        model = filename.split("_")[0]
+        network = filename.split("_")[1]
+        model_dict = {"full":"Gaussian, Full", "ar":"Autorergressive, Full", "trans": "Gaussian, Trans Only", "artrans": "Autoregressive, Trans Only"}
+        if filename[0] != "b":
+            hidden_states = int(filename.split("_")[2])
+            model = filename.split("_")[0]
 
-        for acc in data:
-            df = df.append(
-                {
-                    "Classification Accuracy": acc,
-                    "Approach": approach,
-                    "Hidden States": hidden_states,
-                    "Model": model
-                },
-                ignore_index=True,
-            )
+            for acc in data:
+                df = df.append(
+                    {
+                        "Classification Accuracy": acc,
+                        "Networks": network,
+                        "Hidden States": hidden_states,
+                        "Model": model_dict[model]
+                    },
+                    ignore_index=True,
+                )
+        else:
+            states = np.arange(2,13)
+            model = "Baseline"
+            for acc in data:
+                for state in states:
+                    df = df.append(
+                        {
+                            "Classification Accuracy": acc,
+                            "Networks": network,
+                            "Hidden States": state,
+                            "Model": model
+                        },
+                        ignore_index=True,
+                    )
+
+    with open(os.path.join(directory, "dataframe"), "wb") as file:
+        pickle.dump(df, file)
+
     return df
+
+
+def plot_class_acc(dataframe):
+    """
+    Plots classification accuracy for different models and numbers of hidden states
+
+    Args:
+        dataframe: a dataframe with columns "Classification Accuracy", "Model", "Hidden States", and "Networks"
+
+    Returns:
+        None
+    """
+    sns.set_theme()
+    colors = [
+        [51 / 255, 34 / 255, 136 / 255],
+        [136 / 255, 204 / 255, 238 / 255],
+        [17 / 255, 119 / 255, 51 / 255],
+        [153 / 255, 153 / 255, 51 / 255],
+        [204 / 255, 102 / 255, 119 / 255],
+        [136 / 255, 34 / 255, 85 / 255],
+    ]
+    sns.set_palette(sns.color_palette(colors))
+    fig = sns.relplot(
+        data=dataframe,
+        x="Hidden States",
+        y="Classification Accuracy",
+        hue="Model",
+        col="Networks",
+        kind="line",
+        errorbar="ci"
+    ).set_titles("7 Networks", weight="bold", size=14)
+    sns.move_legend(fig, "lower right", bbox_to_anchor=(0.78, 0.14))
+    fig.legend.set_title(None)
+    fig.legend.set(frame_on=True)
+
+    fig.fig.subplots_adjust(top=0.9)
+    plt.ylim([0, 1])
+    plt.title("17 Networks", weight="bold", fontsize=14)
+
+    fig.tight_layout()
+    plt.show()
+
+    return None
 
 
 def plot_occs(hidden_states, data1, data2):
@@ -758,6 +817,7 @@ def plot_occs(hidden_states, data1, data2):
 
     return dataframe
 
+
 def plot_trans_matrix(mat1, mat2):
     """
     Plots two transition matrices, as well as the element-wise magnitude of their difference
@@ -801,47 +861,6 @@ def plot_trans_matrix(mat1, mat2):
 
     return None
 
-def plot_class_acc(dataframe):
-    """
-    Plots classification accuracy for different models and numbers of hidden states
-
-    Args:
-        dataframe: a dataframe with columns "Classification Accuracy", "Model", "Hidden States", and "Networks"
-
-    Returns:
-        None
-    """
-    sns.set_theme()
-    colors = [
-        [51 / 255, 34 / 255, 136 / 255],
-        [136 / 255, 204 / 255, 238 / 255],
-        [17 / 255, 119 / 255, 51 / 255],
-        [153 / 255, 153 / 255, 51 / 255],
-        [204 / 255, 102 / 255, 119 / 255],
-        [136 / 255, 34 / 255, 85 / 255],
-    ]
-    sns.set_palette(sns.color_palette(colors))
-    fig = sns.relplot(
-        data=dataframe,
-        x="Hidden States",
-        y="Classification Accuracy",
-        hue="Approach",
-        col="Model",
-        kind="line",
-        errorbar="ci"
-    )#.set_titles("7 Networks", weight="bold", size=14)
-    sns.move_legend(fig, "upper right", bbox_to_anchor=(0.817, 0.93))
-    fig.legend.set_title(None)
-    fig.legend.set(frame_on=True)
-
-    fig.fig.subplots_adjust(top=0.9)
-    plt.ylim([0, 1])
-    #plt.title("17 Networks", weight="bold", fontsize=14)
-
-    fig.tight_layout()
-    plt.show()
-
-    return None
 
 def plot_emission_networks(mus):
     num_states = np.shape(mus)[0]
@@ -875,41 +894,8 @@ def plot_emission_networks(mus):
     plt.show()
 
 def main():
-    tues, thurs = import_tuesthurs(7)
-    plot_occs([5, 7, 9], tues, thurs)
-    quit()
-
-    filename = os.path.join(root, "results", "fits", "MyConnectome", "baseline_17")
-    tues, thurs = import_tuesthurs(17)
-    reps = 100
-    for rep in range(reps):
-        acc = [svmcv(tues, thurs)]
-        with open(filename,"ab") as file:
-            np.savetxt(file, acc)
-
-
-    quit()
-
-
-    df = build_dataframe(os.path.join(root, "results", "fits", "testing_hcp"))
+    df = pickle.load(open(os.path.join(root, "results", "fits", "MyConnectome_OOS", "dataframe"), "rb"))
     plot_class_acc(df)
-    quit()
-    emissions, _ = get_saved_params(7, 5, ar=True, key_string="")
-    plot_emission_networks(emissions.biases)#np.average(emissions.weights,axis=2))
-    quit()
-    tues, thurs = import_tuesthurs(7)
-    emissions, probs = get_saved_params(7, 9, ar=True, key_string="")
-    hmm, params, props = init_transonly(emissions, probs, ar=True)
-    params = fit_all_models(hmm, params, props, jnp.array(tues + thurs), ar=True, trans=True)
-    tuesoccs, _, _ = get_stats(hmm, params, tues, ar=True)
-    thursoccs, _, _ = get_stats(hmm, params, thurs, ar=True)
-    plot_occs(tuesoccs, thursoccs)
-    quit()
-
-    dir = os.path.join(root, "results", "fits", "MyConnectome")
-    dataframe = build_dataframe(dir)
-    plot_class_acc(dataframe)
-
 
 if __name__ == "__main__":
     main()
