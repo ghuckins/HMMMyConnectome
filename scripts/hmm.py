@@ -468,12 +468,7 @@ def plot_class_acc(dataframe):
 def main():
     max_states = 12
     states = range(2, max_states + 1)
-    num_networks = 7
-
-    tues, thurs = import_tuesthurs(num_networks)
-    print(len(tues))
-    print(len(thurs))
-    quit()
+    num_networks = 17
 
     data = import_all(num_networks)
     for state in states:
@@ -482,7 +477,7 @@ def main():
 
     savepath = os.path.join(root, "results", "fits", "MyConnectome_OOS")
 
-
+    tues, thurs = import_tuesthurs(num_networks)
     tues_oos, thurs_oos = import_tuesthurs(num_networks, heldout=True)
 
     num_reps = 25

@@ -39,7 +39,6 @@ def import_hcp(num_networks, heldout=False):
             data[file_key] = [np.loadtxt(os.path.join(path,file))]
     return data
 
-
 def alt_params(data, latdim, trans=False, ar=False):
 
     obsdim = np.shape(list(data.values())[0])[2]
@@ -61,7 +60,7 @@ def alt_params(data, latdim, trans=False, ar=False):
         params = {}
 
         if trans:
-            emissions, probs = get_saved_params(obsdim, latdim, ar=ar, key_string="hcp")
+            emissions, probs = get_saved_params(obsdim, latdim, ar=ar, key_string="hcpheldout")
             hmm, base_params, props = init_transonly(emissions, probs, ar=ar)
         else:
             if ar:
@@ -114,7 +113,7 @@ def oos_batch(data, latdim, num_subjs, ho_ids, trans=False, ar=False, lags=1):
     random.shuffle(keys)
     keys = keys[:(num_subjs - len(ho_ids))]
     keys = ho_ids + keys
-    params = alt_params(data, latdim, trans, ar)
+    params = alt_params(data, latdim, trans=trans, ar=ar)
 
     if trans:
         emissions, probs = get_saved_params(obsdim, latdim, ar=ar, key_string="hcpheldout")
@@ -153,6 +152,7 @@ def oos_batch(data, latdim, num_subjs, ho_ids, trans=False, ar=False, lags=1):
     param_list = [random.choice(params[keys[i]]) for i in range(num_subjs)]
     ll_sort = vmap(_fit_fold, in_axes=[0, 0, None])(train, test, param_list)
     indices = jnp.repeat(jnp.arange(len(ho_ids)), 4)+1
+
     #2 ways to get correct classification: either the model fit by the other 3 runs on that subject did best (first
     #element in argsort should be 0) or it did second best, after the alt_params model fit on that subjects' data, which
     #we didn't really want to fit on anyway. next line of code takes into account those 2 possibilities.
@@ -170,7 +170,6 @@ def oos_1state(data, num_subjs, ho_ids, ar=True, lags=1):
         data: a dict of num_timepoints x num_networks numpy arrays, keyed by subject identifier
         latdim: number of hidden states for the HMM
         num_subjs: how many subjects from the dict to use for the cross-validation
-        trans: whether to fit a transition matrix-only model
         ar: whether to fit an autoregressive model
         lags: if the model is autoregressive, how many lags to include
 
@@ -267,22 +266,30 @@ def main():
     num_networks = 7
     is_data = import_hcp(num_networks)
     oos_data = import_hcp(num_networks, heldout=True)
-    ho_ids = oos_data.keys()
+    ho_ids = list(oos_data.keys())
+
     all_data = is_data | oos_data
     states = range(2,13)
 
-    data_list = [item for key in all_data.keys() for item in all_data[key]]
-    random.shuffle(data_list)
-    for state in states:
-        get_params(data_list, state, key_string="hcpheldout")
-        get_params(data_list, state, ar=True, key_string="hcpheldout")
+    print(f"Full: {oos_batch(all_data, 2, 100, ho_ids)}")
+    print(f"AR: {oos_batch(all_data, 2, 100, ho_ids, ar=True)}")
+    print(f"Trans: {oos_batch(all_data, 2, 100, ho_ids, trans=True)}")#print(oos_batch(all_data, 2, 10, ho_ids))
+    print(f"AR Trans: {oos_batch(all_data, 2, 100, ho_ids, ar=True, trans=True)}")
+    quit()
 
-    num_subjs = 100
-    reps = 100
+    #data_list = [item for key in all_data.keys() for item in all_data[key]]
+    #random.shuffle(data_list)
+    #for state in states:
+    #    get_params(data_list, state, key_string="hcpheldout")
+    #    get_params(data_list, state, ar=True, key_string="hcpheldout")
+
+    num_subjs = 10
+    reps = 1
 
     savepath = os.path.join(root, "results", "fits", "HCP_OOS")
 
     for state in states:
+        print(state)
         full_acc = []
         trans_acc = []
         ar_acc = []
@@ -292,15 +299,20 @@ def main():
             trans_acc.append(oos_batch(is_data, state, num_subjs, ho_ids, trans=True))
             ar_acc.append(oos_batch(is_data, state, num_subjs, ho_ids, ar=True))
             artrans_acc.append(oos_batch(is_data, state, num_subjs, ho_ids, ar=True, trans=True))
-        with open(os.path.join(savepath, f"full_{num_networks}_{state}"), "ab") as file:
-            np.savetxt(file, full_acc)
-        with open(os.path.join(savepath, f"trans_{num_networks}_{state}"), "ab") as file:
-            np.savetxt(file, trans_acc)
-        with open(os.path.join(savepath, f"ar_{num_networks}_{state}"), "ab") as file:
-            np.savetxt(file, ar_acc)
-        with open(os.path.join(savepath, f"artrans_{num_networks}_{state}"), "ab") as file:
-            np.savetxt(file, artrans_acc)
+        print(f"Full: {np.mean(full_acc)}")
+        print(f"Trans: {np.mean(trans_acc)}")
+        print(f"AR: {np.mean(ar_acc)}")
+        print(f"AR Trans: {np.mean(artrans_acc)}")
+        #with open(os.path.join(savepath, f"full_{num_networks}_{state}"), "ab") as file:
+        #    np.savetxt(file, full_acc)
+        #with open(os.path.join(savepath, f"trans_{num_networks}_{state}"), "ab") as file:
+        #    np.savetxt(file, trans_acc)
+        #with open(os.path.join(savepath, f"ar_{num_networks}_{state}"), "ab") as file:
+        #    np.savetxt(file, ar_acc)
+        #with open(os.path.join(savepath, f"artrans_{num_networks}_{state}"), "ab") as file:
+        #    np.savetxt(file, artrans_acc)
 
+    quit()
     #last, we fit 1-state models
     full_acc = []
     ar_acc = []
