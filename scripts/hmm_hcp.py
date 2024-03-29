@@ -6,6 +6,7 @@ import pickle
 from k_means import kmeans_init
 import jax.numpy as jnp
 from jax import vmap
+from scipy.stats import zscore
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -38,6 +39,67 @@ def import_hcp(num_networks, heldout=False):
         else:
             data[file_key] = [np.loadtxt(os.path.join(path,file))]
     return data
+
+def import_raw_hcp(num_networks):
+    """
+    Imports and preprocesses HCP data by:
+        -applying global signal regression
+        -averaging activity across Yeo networks (according to parcellation specified by num_networks)
+        -z-scoring activity across time for each network
+
+    Args:
+        num_networks: int (7 or 17) indicating whether to use 7- or 17-network Yeo parcellation (or 512 for no parcel)
+
+    Returns:
+        None
+    """
+    path = os.path.join(data_root, "HCP")
+    files = {}
+    for file in os.listdir(path): #sorting data by subject identifier
+        #the point of having this here now is to check that each subj has 4 runs
+        file_key = file[4:10]
+        if file_key in files.keys():
+            files[file_key].append(file)
+        else:
+            files[file_key] = [file]
+
+    savepath = os.path.join(root, "data", f"hcpdata{num_networks}")
+
+    if not os.path.exists(savepath):
+        os.mkdir(savepath)
+
+    for key in files.keys():
+        if len(files[key]) < 4: #if I don't have 4 runs for that subject
+            continue
+        i = 0
+        while i < 4:
+            raw_data = np.load(os.path.join(path, files[key][i]))
+            raw_data = gsr(raw_data)
+            if num_networks == 512:
+                activities = zscore(raw_data, axis=0)
+            else:
+                activities = zscore(get_network_activity(raw_data, num_networks, hcp=True), axis=0)
+            np.savetxt(os.path.join(savepath, f"sub{key}_{i}.txt"), activities)
+            i += 1
+
+    return None
+
+def gsr(data):
+    """
+    Applies global signal regression to data
+
+    Args:
+        data: A numpy array of fMRI data; each row is a timepoint and each column is a ROI
+
+    Returns:
+        gsr_data: A numpy array of fMRI data with global signal regressed out
+    """
+    gsignal = np.average(data, axis=1)
+    gsignal = np.reshape(gsignal, (-1, 1))
+    ginverse = np.linalg.inv(gsignal.T @ gsignal) @ gsignal.T
+    beta = ginverse @ data
+    gsr_data = data - gsignal @ beta
+    return gsr_data
 
 def alt_params(data, latdim, trans=False, ar=False):
 
@@ -218,7 +280,7 @@ def oos_1state(data, num_subjs, ho_ids, ar=True, lags=1):
     return correct/(len(ho_ids)*4)
 
 
-def baseline_fingerprint(num_networks, num_subjs):
+def baseline_fingerprint(data, ho_ids, num_networks, num_subjs):
     """
     Uses correlation of correlations to classify runs of data according to subject identity
 
@@ -230,10 +292,12 @@ def baseline_fingerprint(num_networks, num_subjs):
     Returns:
         The accuracy of the classifier
     """
-    data = import_hcp(num_networks)
     keys = list(data.keys())
+    for id in ho_ids:
+        keys.remove(id)
     random.shuffle(keys)
-    keys = keys[:num_subjs]
+    keys = keys[:(num_subjs - len(ho_ids))]
+    keys = keys + ho_ids
     compare_cov = {}
     for key in keys: #getting baseline average cov matrices from 3 runs for all participants
         compare_data = data[key]
@@ -241,7 +305,7 @@ def baseline_fingerprint(num_networks, num_subjs):
         compare_data = compare_data[:-1]
         compare_cov[key] = np.average(np.array([np.corrcoef(item.T) for item in compare_data]),axis=0)
     correct = 0
-    for key in keys:
+    for key in ho_ids:
         i = 0
         while i < len(data[key]):
             train_data = data[key].copy()
@@ -259,11 +323,12 @@ def baseline_fingerprint(num_networks, num_subjs):
                 correct += 1
             i = i + 1
 
-    return correct/(4*num_subjs)
+    return correct/(4*len(ho_ids))
 
 
 def main():
-    num_networks = 7
+
+    num_networks = 512
     is_data = import_hcp(num_networks)
     oos_data = import_hcp(num_networks, heldout=True)
     ho_ids = list(oos_data.keys())
@@ -271,14 +336,22 @@ def main():
     all_data = is_data | oos_data
     states = range(2,13)
 
-    data_list = [item for key in all_data.keys() for item in all_data[key]]
-    random.shuffle(data_list)
-    for state in states:
-        get_params(data_list, state, key_string="hcpheldout")
-        get_params(data_list, state, ar=True, key_string="hcpheldout")
+    #data_list = [item for key in all_data.keys() for item in all_data[key]]
+    #random.shuffle(data_list)
+    #for state in states:
+    #    get_params(data_list, state, key_string="hcpheldout")
+    #    get_params(data_list, state, ar=True, key_string="hcpheldout")
 
-    num_subjs = 10
-    reps = 1
+    num_subjs = 100
+    reps = 100
+
+    accs = []
+    for rep in range(reps):
+        accs.append(baseline_fingerprint(all_data, ho_ids, num_networks, num_subjs))
+    with open(os.path.join(root, "results", "fits", "HCP_OOS", f"baseline_{num_networks}"), "ab") as file:
+        np.savetxt(file, accs)
+
+    quit()
 
     savepath = os.path.join(root, "results", "fits", "HCP_OOS")
 
