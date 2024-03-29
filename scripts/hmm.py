@@ -674,6 +674,7 @@ def build_dataframe(directory):
         df: a pandas dataframe containing the classification accuracy data
     """
     df = pd.DataFrame()
+    states = np.arange(1, 13)
     for filename in os.listdir(directory):
         data = np.loadtxt(os.path.join(directory, filename))
         network = filename.split("_")[1]
@@ -692,8 +693,30 @@ def build_dataframe(directory):
                     },
                     ignore_index=True,
                 )
+        elif network == "512":
+            model = "Baseline (512-D)"
+            for acc in data:
+                for state in states:
+                    df = df.append(
+                        {
+                            "Classification Accuracy": acc,
+                            "Networks": "7",
+                            "Hidden States": state,
+                            "Model": model
+                        },
+                        ignore_index=True,
+                    )
+                    df = df.append(
+                        {
+                            "Classification Accuracy": acc,
+                            "Networks": "17",
+                            "Hidden States": state,
+                            "Model": model
+                        },
+                        ignore_index=True,
+                    )
+
         else:
-            states = np.arange(2,13)
             model = "Baseline"
             for acc in data:
                 for state in states:
@@ -742,12 +765,12 @@ def plot_class_acc(dataframe):
         kind="line",
         errorbar="ci"
     ).set_titles("7 Networks", weight="bold", size=14)
-    sns.move_legend(fig, "lower right", bbox_to_anchor=(0.78, 0.14))
+    sns.move_legend(fig, "lower right", bbox_to_anchor=(0.99, 0.12))
     fig.legend.set_title(None)
     fig.legend.set(frame_on=True)
 
     fig.fig.subplots_adjust(top=0.9)
-    plt.ylim([0, 1])
+    plt.ylim([0, 1.05])
     plt.title("17 Networks", weight="bold", fontsize=14)
 
     fig.tight_layout()
@@ -894,8 +917,10 @@ def plot_emission_networks(mus):
     plt.show()
 
 def main():
-    df = pickle.load(open(os.path.join(root, "results", "fits", "MyConnectome_OOS", "dataframe"), "rb"))
+    df = pickle.load(open(os.path.join(root, "results", "fits", "HCP_OOS", "dataframe"), "rb"))
     plot_class_acc(df)
+
+
 
 if __name__ == "__main__":
     main()
