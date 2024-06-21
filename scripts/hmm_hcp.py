@@ -10,6 +10,8 @@ import jax.numpy as jnp
 from jax import vmap
 import pickle
 import warnings
+import seaborn as sns
+import matplotlib.pyplot as plt
 warnings.filterwarnings("ignore")
 
 from src.dynamax.hidden_markov_model.models.gaussian_hmm import DiagonalGaussianHMM
@@ -287,10 +289,9 @@ def loohcp_1state(data, num_subjs, ar=True, lags=1):
 
 def loohcp_confusion(data, latdim, num_subjs, trans=False, ar=False, lags=1):
     """
-    TO DELETE OR REPLACE
-
     Performs leave-one-out cross-validation by fitting individual HMMs to 3 runs from each subject in data,
     and then evaluating whether the 4th run from each subject has the maximum log likelihood under that subject's HMM
+    If a run is labeled with the wrong individual, it is recorded in a confusion matrix
 
     Args:
         data: a dict of num_timepoints x num_networks numpy arrays, keyed by subject identifier
@@ -465,15 +466,87 @@ def baseline_fingerprint(num_networks, num_subjs):
     return correct/(4*num_subjs)
 
 
-def main():
-    filename = os.path.join(root, "results", "fits", "HCP", "full_7_1")
-    data = import_hcp(7)
-    reps = 46
-    for rep in range(reps):
-        acc = [loohcp_1state(data, 100, ar=False)]
-        with open(filename,"ab") as file:
-            np.savetxt(file, acc)
+def family_errors(confusion, perm=False):
+    family_df = pd.read_csv(os.path.join(data_root, "HCP", "sub_info.csv")).set_index("sub")
+    if perm:
+        family_df['family_id'] = np.random.permutation(family_df['family_id'])
+    family_errors = 0
+    nonfamily_errors = 0
+    for id in list(confusion.keys()):
+        for confusion_id in list(confusion[id].keys()):
+            if family_df.loc[id]["family_id"] == family_df.loc[confusion_id]["family_id"] and id != confusion_id:
+                family_errors += confusion[id][confusion_id]
+            elif id != confusion_id:
+                nonfamily_errors += confusion[id][confusion_id]
+    return family_errors, nonfamily_errors
 
+
+def plot_family(dataframe):
+    sns.set(font_scale=0.75)
+    sns.set_theme()
+    colors = [
+        [51 / 255, 34 / 255, 136 / 255],
+        [136 / 255, 204 / 255, 238 / 255],
+        [17 / 255, 119 / 255, 51 / 255],
+        [153 / 255, 153 / 255, 51 / 255],
+        [204 / 255, 102 / 255, 119 / 255],
+        [136 / 255, 34 / 255, 85 / 255],
+    ]
+    sns.set_palette(sns.color_palette(colors))
+    fig = sns.relplot(data=dataframe, x="Hidden States", y="Error Fraction", hue="Permuted", col="Model", kind="line", errorbar="ci")
+    fig.set_titles("{col_name}", size=14, weight="bold")
+    sns.move_legend(fig, "upper right", bbox_to_anchor=(0.945, 0.92))
+    fig.legend.set(frame_on=True)
+    plt.setp(fig._legend.get_texts(), fontsize=12)
+    plt.setp(fig._legend.get_title(), fontsize=12, weight="bold")
+    fig.set(xticks=np.arange(2,7))
+    plt.show()
+
+
+
+def main():
+
+
+    with open(os.path.join(root, "results", "family", "dataframe"), "rb") as file:
+        df = pickle.load(file)
+
+    #df = df.sort_values("Model")
+    df.iloc[30], df.iloc[50] = df.iloc[50], df.iloc[30].copy()
+
+    plot_family(df)
+
+    quit()
+
+    ids = []
+    for file in os.listdir(os.path.join(root, "data", "hcpdata512")):
+        if int(file[3:9]) not in ids:
+            ids.append(int(file[3:9]))
+    print(len(ids))
+    demographics = pd.read_csv(os.path.join(data_root, "HCP", "hcp_demographics.csv"))
+    demographics = demographics.set_index("Subject")
+    demographics = demographics.loc[ids]
+    demographics = demographics.sort_values("Age")
+    sns.set_theme()
+    colors = [
+        [51 / 255, 34 / 255, 136 / 255],
+        [136 / 255, 204 / 255, 238 / 255],
+        [17 / 255, 119 / 255, 51 / 255],
+        [153 / 255, 153 / 255, 51 / 255],
+        [204 / 255, 102 / 255, 119 / 255],
+        [136 / 255, 34 / 255, 85 / 255],
+    ]
+    sns.set_palette(sns.color_palette(colors))
+    sns.histplot(demographics, x="Gender")
+    plt.title("Validation Sample")
+    plt.show()
+    quit()
+
+    data = import_hcp(7)
+
+    latdim = 3
+    num_subjs = 100
+    results, confusion = loohcp_confusion(data, latdim, num_subjs, trans=False, ar=False)
+    print(family_errors(confusion, perm=False))
 
 if __name__ == "__main__":
     main()

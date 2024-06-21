@@ -13,6 +13,7 @@ import jax.numpy as jnp
 from jax import vmap
 from k_means import kmeans_init
 import seaborn as sns
+import statsmodels.formula.api as smf
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -545,6 +546,40 @@ def svmcv(data1, data2):
     return np.average([correct1 / len(data1), correct2 / len(data2)])
 
 
+def motion_param_svm():
+    """
+    Evaluates performance of a linear SVM on motion parameters using LOO cross-validation
+
+    Returns:
+        The balanced accuracy of the classifier
+    """
+    x = []
+    y = []
+    path = os.path.join(root, "Data")
+    for filename in os.listdir(os.path.join(path,"data7")):
+        if filename[-5] == "t":
+            y.append(0)
+            data = np.loadtxt(os.path.join(path, "tmasks", (filename[:-5] + filename[-4:])))
+            x.append(np.sum(data))
+        elif filename[-5] == "r":
+            y.append(1)
+            data = np.loadtxt(os.path.join(path, "tmasks", (filename[:-5] + filename[-4:])))
+            x.append(np.sum(data))
+    classifier = svm.SVC(kernel="linear")
+    x = list(zscore(x))
+    correct1 = 0
+    correct2 = 0
+    for i in range(len(x)):
+        print(i)
+        classifier.fit(np.array(x[:i] + x[i+1:]).reshape((-1, 1)), y[:i] + y[i+1:])
+        if classifier.predict(np.array(x[i].reshape((-1, 1)))) == y[i]:
+            if y[i] == 0:
+                correct1 += 1
+            else:
+                correct2 += 1
+    return np.average([correct1 / (len(y) - np.sum(y)), correct2 / np.sum(y)])
+
+
 def get_transmats(data, latdim, together=False, ar=False, lags=1):
     """
     Fits a transition matrix-only HMM to a dataset and returns the fit transition matrix/matrices
@@ -626,7 +661,7 @@ def get_stats(hmm, params, datas, ar):
     Args:
         hmm: the hidden markov model
         params: parameters of the model
-        datas: list of num_timepoins x num_networks numpy arrays for which to find the hidden states
+        datas: list of num_timepoints x num_networks numpy arrays for which to find the hidden states
         ar: whether or not the model is autoregressive
 
     Returns:
@@ -641,26 +676,62 @@ def get_stats(hmm, params, datas, ar):
     input = []
     for i in range(num_states - 1):
         dwells.append([])
-    reps = 1
-    for rep in np.arange(reps):
-        for data in datas:
-            if ar:
-                input = hmm.compute_inputs(data)
-            state = hmm.most_likely_states(params, data, inputs=input)
-            change = np.nonzero(np.diff(state))
-            change = change[0]
-            num_change = len(change)
-            changes.append(num_change)
-            occ = np.histogram(state, bins=num_states, range=(0, num_states))[0]
-            occs.append(occ)
-            for i in range(num_change):
-                if i == 0:
-                    dwells[state[change[i]]].append(change[0]+1)
-                else:
-                    dwells[state[change[i]]].append(change[i] - change[i - 1])
-            dwells[state[-1]].append(len(state) - change[-1] - 1)
+    for data in datas:
+        if ar:
+            input = hmm.compute_inputs(data)
+        state = hmm.most_likely_states(params, data, inputs=input)
+        change = np.nonzero(np.diff(state))
+        change = change[0]
+        num_change = len(change)
+        changes.append(num_change)
+        occ = np.histogram(state, bins=num_states, range=(0, num_states))[0]
+        occs.append(occ)
+        for i in range(num_change):
+            if i == 0:
+                dwells[state[change[i]]].append(change[0]+1)
+            else:
+                dwells[state[change[i]]].append(change[i] - change[i - 1])
+        dwells[state[-1]].append(len(state) - change[-1] - 1)
 
-        return occs, dwells, changes
+    return occs, dwells, changes
+
+
+def get_state_networks(hmm, params, datas, ar):
+    """
+    Returns the average networks for each hidden state of the hmm across all the data in datas
+
+    Args:
+        hmm: the hidden markov model
+        params: parameters of the model
+        datas: list of num_timepoints x num_networks numpy arrays for which to find the hidden states
+        ar: whether or not the model is autoregressive
+
+    Returns:
+        a DataFame of the average activities for each state and network
+    """
+    num_states = np.shape(params.transitions.transition_matrix)[0]
+    num_networks = np.shape(datas[0])[1]
+    states = np.arange(num_states)
+    activities_dict = {}
+    for state in states:
+        activities_dict[state] = []
+    for data in datas:
+        if ar:
+            input = hmm.compute_inputs(data)
+        ml_states = hmm.most_likely_states(params, data, inputs=input)
+        for state in states:
+            activities_dict[state] = activities_dict[state] + [data[ml_states == state]]
+    activities_list = []
+    state_list = []
+    networks = (np.arange(num_networks)/num_networks * 2 * math.pi + math.pi/(2*num_networks)).tolist() + [math.pi/(2*num_networks)]
+    for state in states:
+        state_list += [state]*(num_networks + 1)
+        avg_activities = np.average(np.concatenate(activities_dict[state], axis=0), axis=0).tolist()
+        activities_list += avg_activities
+        activities_list += [avg_activities[0]]
+    network_list = networks*num_states
+    df = pd.DataFrame({"State": state_list, "Network": network_list, "Activity": activities_list})
+    return df
 
 
 def build_dataframe(directory):
@@ -684,15 +755,17 @@ def build_dataframe(directory):
             model = filename.split("_")[0]
 
             for acc in data:
-                df = df.append(
-                    {
+                df = pd.concat([df,
+                    pd.DataFrame({
                         "Classification Accuracy": acc,
                         "Networks": network,
                         "Hidden States": hidden_states,
-                        "Model": model_dict[model]
-                    },
+                        "Model": model_dict[model]#,
+                        #"Permuted": filename[-1]=="m"
+                    }, index=[0])],
                     ignore_index=True,
                 )
+
         elif network == "512":
             model = "Baseline (512-D)"
             for acc in data:
@@ -729,6 +802,7 @@ def build_dataframe(directory):
                         },
                         ignore_index=True,
                     )
+
 
     with open(os.path.join(directory, "dataframe"), "wb") as file:
         pickle.dump(df, file)
@@ -885,42 +959,102 @@ def plot_trans_matrix(mat1, mat2):
     return None
 
 
-def plot_emission_networks(mus):
-    num_states = np.shape(mus)[0]
-    obsdim = np.shape(mus)[1]
-    fig, axs = plt.subplots(1, num_states, subplot_kw=dict(projection="polar"))
-    theta = np.arange(obsdim) / obsdim * 2 * math.pi
-    i = 0
-    while i < num_states:
-        axs[i].set_ylim([-0.5, 0.5])
-        axs[i].plot(theta, mus[i, :])
-        axs[i].set_xticklabels([])
-        axs[i].set_yticklabels([])
-        for t, r in zip(theta, mus[i, :]):
-            axs[i].annotate(str(round(t * 7 / (2 * math.pi) + 1)), xy=[t, r])
-        i += 1
-    if obsdim == 7:
-        networkstring = (
-            "1 - Visual\n"
-            "2 - Somatomotor\n"
-            "3 - Dorsal Attention\n"
-            "4 - Salience / Ventral Attention\n"
-            "5 - Limbic\n"
-            "6 - Control\n"
-            "7 - Default\n"
-        )
-    else:
-        networkstring = (
-            "check"
-        )
-    plt.text(-100, 0, networkstring, fontsize=10)
+def plot_emission_networks(activities_df):
+    sns.set(font_scale=0.75)
+    sns.set_theme()
+    colors = [
+        [51 / 255, 34 / 255, 136 / 255],
+        [136 / 255, 204 / 255, 238 / 255],
+        [17 / 255, 119 / 255, 51 / 255],
+        [153 / 255, 153 / 255, 51 / 255],
+        [204 / 255, 102 / 255, 119 / 255],
+        [136 / 255, 34 / 255, 85 / 255],
+    ]
+    sns.set_palette(sns.color_palette(colors))
+
+
+    fig = sns.FacetGrid(activities_df, col="State", hue="State", sharex=True, sharey=False,
+                      subplot_kws=dict(projection='polar'), height=4.5, despine=False)
+    fig.map(sns.lineplot, "Network", "Activity", sort=False, estimator=None)
+    fig.set(xticks=np.arange(7)/7 * 2 * math.pi + math.pi/14)
+    fig.set_xticklabels(["Visual", "Somatomotor", "Dorsal\nAttention", "Salience   ", "Limbic", "Control", "Default"])
+    fig.set(yticks=np.arange(-0.3, 0.6, 0.3))
+    fig.set_yticklabels([-0.3,  0, 0.3])
+    fig.set(ylim=(-0.4, 0.4))
+    fig.set_axis_labels("")
+    fig.set_ylabels("")
+    fig.set_titles("State {col_name}", size=14, weight="bold")
+    #plt.subplots_adjust(top=0.7)
+    plt.xticks(rotation=45)
+    plt.subplots_adjust(wspace=0.5)
     plt.show()
 
+
+def plot_hmm_ll(data, maxstates, folds):
+    sns.set_theme()
+    colors = [
+        [51 / 255, 34 / 255, 136 / 255],
+        [136 / 255, 204 / 255, 238 / 255],
+        [17 / 255, 119 / 255, 51 / 255],
+        [153 / 255, 153 / 255, 51 / 255],
+        [204 / 255, 102 / 255, 119 / 255],
+        [136 / 255, 34 / 255, 85 / 255],
+    ]
+    sns.set_palette(sns.color_palette(colors))
+    test_ll = np.zeros(maxstates - 1)
+    obsdim = np.shape(data[0])[1]
+    hiddenstates = np.arange(2, maxstates + 1)
+    kf = KFold(n_splits=folds)
+    for train, test in kf.split(data):
+        for num_states in hiddenstates:
+            #hmm = DiagonalGaussianHMM(num_states, obsdim)
+            hmm = LinearAutoregressiveHMM(num_states, obsdim, num_lags=1)
+            params, props = hmm.initialize(method="kmeans", emissions=np.array(data)[train])
+            inputs = []
+            for index in train:
+                inputs.append(hmm.compute_inputs(np.array(data)[index]))
+            params, _ = hmm.fit_em(params, props, np.array(data)[train], num_iters=1000, inputs=np.array(inputs), verbose=False)
+            for index in test:
+                inputs = hmm.compute_inputs(np.array(data)[index])
+                test_ll[num_states - 2] += hmm.marginal_log_prob(params, np.array(data)[index], inputs=inputs)
+    sns.lineplot(x=hiddenstates, y=test_ll/len(data))
+    plt.xlabel("Hidden States")
+    plt.ylabel("Average Log Likelihood")
+    plt.title("ARHMM")
+    plt.show()
+
+
 def main():
-    df = pickle.load(open(os.path.join(root, "results", "fits", "HCP_OOS", "dataframe"), "rb"))
-    plot_class_acc(df)
+
+    with (open(os.path.join(root, "results", "fits", "MyConnectome", "dataframe"), "rb")) as file:
+        data = pickle.load(file)
+
+    data = data.rename({"Classification Accuracy":"Classification_Accuracy", "Hidden States":"Hidden_States"}, axis=1)
+    #plot_class_acc(data)
+    model = smf.ols("Classification_Accuracy ~ Model + Hidden_States + Networks", data)
+    result = model.fit()
+    print(result.summary())
+
+    model2 = smf.ols("Classification_Accuracy ~ Hidden_States + Networks", data)
+    result2 = model2.fit()
+    #compare_lr_test
 
 
+    asfgw4352t3w2341
+
+
+    data = import_all(7)
+    plot_hmm_ll(data, 12, 5)
+    quit()
+
+    data = import_all(7)
+    emissions, probs = get_saved_params(7, 5, ar=True, key_string="")
+    hmm, params, props = init_transonly(emissions, probs, ar=True)
+    params = fit_all_models(hmm, params, props, jnp.array(data), ar=True)
+
+
+    df = get_state_networks(hmm, params, data, ar=True)
+    plot_emission_networks(df)
 
 if __name__ == "__main__":
     main()
