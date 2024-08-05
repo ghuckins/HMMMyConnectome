@@ -745,23 +745,28 @@ def build_dataframe(directory):
         df: a pandas dataframe containing the classification accuracy data
     """
     df = pd.DataFrame()
-    states = np.arange(1, 13)
+    states = np.arange(2, 13)
     for filename in os.listdir(directory):
         data = np.loadtxt(os.path.join(directory, filename))
         network = filename.split("_")[1]
-        model_dict = {"full":"Gaussian, Full", "ar":"Autorergressive, Full", "trans": "Gaussian, Trans Only", "artrans": "Autoregressive, Trans Only"}
+        model_dict = {"full":"Full, HMM", "ar":"Full, ARHMM", "trans": "Trans Only, HMM", "artrans": "Trans Only, ARHMM"}
+        category_dict = {"hc":"Healty Control", "psych":"Psychosis"}
         if filename[0] != "b":
             hidden_states = int(filename.split("_")[2])
+            #if hidden_states > 8:
+                #continue
             model = filename.split("_")[0]
+            category = filename.split("_")[3]
 
             for acc in data:
                 df = pd.concat([df,
                     pd.DataFrame({
-                        "Classification Accuracy": acc,
-                        "Networks": network,
+                        "Confusion Ratio": acc,
+                        #"Networks": network,
+                        "Category": category_dict[category],
                         "Hidden States": hidden_states,
-                        "Model": model_dict[model]#,
-                        #"Permuted": filename[-1]=="m"
+                        "Model": model_dict[model],
+                        #"Motion": motion_dict[motion]
                     }, index=[0])],
                     ignore_index=True,
                 )
@@ -790,7 +795,7 @@ def build_dataframe(directory):
                     )
 
         else:
-            model = "Baseline"
+            model = "zBaseline"
             for acc in data:
                 for state in states:
                     df = df.append(
@@ -803,6 +808,8 @@ def build_dataframe(directory):
                         ignore_index=True,
                     )
 
+    df.sort_values(by="Model", ascending=True, inplace=True)
+    df.loc[df["Model"] == "zBaseline", "Model"] = "Baseline"
 
     with open(os.path.join(directory, "dataframe"), "wb") as file:
         pickle.dump(df, file)
@@ -839,16 +846,20 @@ def plot_class_acc(dataframe):
         kind="line",
         errorbar="ci"
     ).set_titles("7 Networks", weight="bold", size=14)
-    sns.move_legend(fig, "lower right", bbox_to_anchor=(0.99, 0.12))
+    sns.move_legend(fig, "lower right", bbox_to_anchor=(0.815, 0.67))
     fig.legend.set_title(None)
     fig.legend.set(frame_on=True)
+    #plt.setp(fig._legend.get_texts(), fontsize=12)
 
     fig.fig.subplots_adjust(top=0.9)
     plt.ylim([0, 1.05])
     plt.title("17 Networks", weight="bold", fontsize=14)
 
+
+
     fig.tight_layout()
     plt.show()
+    #plt.savefig("./results/figs_new/psych_transparent.png", facecolor=(1, 1, 1, 0))
 
     return None
 
@@ -1025,6 +1036,43 @@ def plot_hmm_ll(data, maxstates, folds):
 
 
 def main():
+
+    directory = os.path.join(root, "results", "fits", "confusion")
+    build_dataframe(directory)
+
+    with open(os.path.join(directory, "dataframe"), "rb") as file:
+        dataframe = pickle.load(file)
+
+    sns.set_theme()
+    colors = [
+        [51 / 255, 34 / 255, 136 / 255],
+        [136 / 255, 204 / 255, 238 / 255],
+        [17 / 255, 119 / 255, 51 / 255],
+        [153 / 255, 153 / 255, 51 / 255],
+        [204 / 255, 102 / 255, 119 / 255],
+        [136 / 255, 34 / 255, 85 / 255],
+    ]
+    sns.set_palette(sns.color_palette(colors))
+    fig = sns.catplot(data=dataframe, x="Hidden States", y="Confusion Ratio", hue="Category", errorbar="ci", col="Model", kind="bar", sharex=False)
+    fig.set_titles("{col_name}")
+    fig.legend.set_title(None)
+    fig.legend.set(frame_on=True)
+    fig.refline(y=1, color=colors[4])
+    sns.move_legend(fig, "upper right", bbox_to_anchor=(0.89, 0.93))
+    plt.setp(fig._legend.get_texts(), fontsize=12)
+    plt.subplots_adjust(wspace=0.1)
+
+    plt.show()
+
+    quit()
+
+
+    plot_class_acc(dataframe)
+    quit()
+    tues, thurs = import_tuesthurs(7)
+    loocv_batch(tues, thurs, 5)
+
+    quit()
 
     with (open(os.path.join(root, "results", "fits", "MyConnectome", "dataframe"), "rb")) as file:
         data = pickle.load(file)
